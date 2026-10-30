@@ -77,10 +77,10 @@ and test spreadsheet. `clasp push` updates the Script ID in `.clasp.json`.
 ### Another user continues the project
 
 ```bash
-git clone https://github.com/<USER_OR_ORG>/<REPOSITORY>.git
-cd <REPOSITORY>
+git clone https://github.com/IlhamAkbar021/Official-ISO.git
+cd Official-ISO
 npm install -g @google/clasp
-clasp login
+clasp login (Company account)
 clasp push
 ```
 
