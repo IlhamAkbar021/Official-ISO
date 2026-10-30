@@ -3,7 +3,10 @@
 Google Apps Script web app for reading and updating ISO test results stored in
 Google Sheets.
 
+
 ## File map
+<img width="1902" height="954" alt="image" src="https://github.com/user-attachments/assets/da0949cd-e80c-4765-b468-a1c6629fb6d4" />
+
 
 ### Application shell
 
