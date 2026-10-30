@@ -56,26 +56,6 @@ source connects to a writable Google Sheet. Never commit OAuth tokens or
 passwords. The registered tester directory is stored in Apps Script
 `ScriptProperties`, not in GitHub.
 
-### First upload to GitHub
-
-Run these commands from `/home/user/Official ISO` after creating an empty
-private repository on GitHub:
-
-```bash
-npm install -g @google/clasp
-clasp login
-clasp status
-git init
-git add .
-git commit -m "Initial AC3110 DVT ISO application"
-git branch -M main
-git remote add origin https://github.com/<USER_OR_ORG>/<REPOSITORY>.git
-git push -u origin main
-```
-
-Do not create a second README or `.gitignore` on GitHub when this local project
-already contains those files.
-
 ### Branch-based testing
 
 ```bash
