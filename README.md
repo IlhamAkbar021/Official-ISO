@@ -51,8 +51,7 @@ project uses clear file sections and a file map instead of nested folders.
 
 Production Script ID: `1f4NuoWEDFo_fjguv6-N06MWr9prhbqVE52xTX0jiC4TJmIXnLJ7AGTgM`
 
-Keep the GitHub repository private. The Script ID is an identifier, but this
-source connects to a writable Google Sheet. Never commit OAuth tokens or
+The Script ID is an identifier, but this source connects to a writable Google Sheet. Never commit OAuth tokens or
 passwords. The registered tester directory is stored in Apps Script
 `ScriptProperties`, not in GitHub.
 
