@@ -1,0 +1,27 @@
+<script>
+  /**
+   * Head Depth Camera browser configuration.
+   *
+   * Shared image helpers remain in App_JS.html because the Overview page also
+   * displays Head Depth evidence. This file contains Head Depth-specific UI
+   * metadata and keeps the module's display rules in one place.
+   */
+  var HEAD_DEPTH_UI = {
+    key: 'headdepth',
+    title: 'Head Depth Camera',
+    imageLabel: 'Head depth camera image',
+    imageColumns: ['image', 'photo', 'picture', 'screenshot', 'evidence', 'capture', 'camera']
+  };
+
+  // Temporary hardcoded test image supplied from the Head Depth sheet.
+  // Replace this with one URL per robot/row after confirming the panel flow.
+  var HEAD_DEPTH_TEST_IMAGE_URL = 'https://docs.google.com/sheets-images-rt/AO43MLY1FuBYlV_FczxsgikPDPlfZoskfBRVIhWpUvSwLBhTwMSHSI2WuUkulZWvCepa-de9n2HqZh7PjcIHAfjMxfnyJ5gI0Oj5gX2xtjl1PuUpJIQ0OasPSgdh9PgeHThfG3NIIE-7QeZmDlAM7VEIPLJudfWV5P9ns-tF6VL9ODCBOx-b=s2048?key=kCny20RQM5-9zoEAfSXBfw';
+
+  function isHeadDepthModule(moduleKey) {
+    return moduleKey === HEAD_DEPTH_UI.key;
+  }
+
+  function getHeadDepthImageTitle(header) {
+    return String(header || HEAD_DEPTH_UI.imageLabel).trim() || HEAD_DEPTH_UI.imageLabel;
+  }
+</script>

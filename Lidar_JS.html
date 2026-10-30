@@ -1,0 +1,162 @@
+<script>
+  var activeLidarEditType = 'accuracy';
+
+  function renderLidarModal() {
+    document.getElementById('modalTitle').innerText = 'Add LiDAR Record';
+    var today = new Date().toISOString().split('T')[0];
+
+    document.getElementById('formBody').innerHTML = 
+      '<div class="form-group">' +
+        '<label>Select Data Collection Type</label>' +
+        '<select id="l_type" onchange="toggleLidarFields()">' +
+          '<option value="accuracy">LiDAR Accuracy Data (Creates 3 Test Runs)</option>' +
+          '<option value="tilt">LiDAR Tilt Data</option>' +
+        '</select>' +
+      '</div>' +
+
+      '<!-- Accuracy Form -->' +
+      '<div id="lidar_acc_box">' +
+        '<div class="flex-row">' +
+          '<div class="form-group" style="flex:1;"><label>Robot ID</label><input type="text" id="l_a_robot" list="registeredRobotList" onfocus="hydrateRegisteredRobotList()" placeholder="e.g. AC3110 DVT1-1" required></div>' +
+          '<div class="form-group" style="flex:1;"><label>Date</label><input type="date" id="l_a_date" value="' + today + '" required></div>' +
+        '</div>' +
+        '<div class="flex-row">' +
+          '<div class="form-group" style="flex:1;"><label>SW Version</label><input type="text" id="l_a_sw" placeholder="e.g. 2026-27-02-2" required></div>' +
+          '<div class="form-group" style="flex:1;"><label>Tester Name</label><input type="text" id="l_a_tester" list="registeredTesterList" onfocus="hydrateRegisteredTesterList()" placeholder="e.g. Mike" required></div>' +
+        '</div>' +
+
+        '<div style="margin-top:0.75rem; padding:0.75rem; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;">' +
+          '<div style="font-weight:600; font-size:0.825rem; margin-bottom:0.4rem; color:#4f46e5;">A - 5m Test Inputs</div>' +
+          '<div class="flex-row">' +
+            '<div class="form-group" style="flex:1;"><label>Distance (m)</label><input type="number" step="0.01" id="l_a5_dist" placeholder="5.03" required></div>' +
+            '<div class="form-group" style="flex:1;"><label>STD (m)</label><input type="number" step="0.01" id="l_a5_std" value="0.00" required></div>' +
+            '<div class="form-group" style="flex:1;"><label>Valid Points</label><input type="number" id="l_a5_pts" value="9" required></div>' +
+          '</div>' +
+        '</div>' +
+
+        '<div style="margin-top:0.5rem; padding:0.75rem; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;">' +
+          '<div style="font-weight:600; font-size:0.825rem; margin-bottom:0.4rem; color:#4f46e5;">B - 10m Test Inputs</div>' +
+          '<div class="flex-row">' +
+            '<div class="form-group" style="flex:1;"><label>Distance (m)</label><input type="number" step="0.01" id="l_b10_dist" placeholder="10.02" required></div>' +
+            '<div class="form-group" style="flex:1;"><label>STD (m)</label><input type="number" step="0.01" id="l_b10_std" value="0.00" required></div>' +
+            '<div class="form-group" style="flex:1;"><label>Valid Points</label><input type="number" id="l_b10_pts" value="9" required></div>' +
+          '</div>' +
+        '</div>' +
+
+        '<div style="margin-top:0.5rem; padding:0.75rem; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;">' +
+          '<div style="font-weight:600; font-size:0.825rem; margin-bottom:0.4rem; color:#4f46e5;">C - 15m Test Inputs</div>' +
+          '<div class="flex-row">' +
+            '<div class="form-group" style="flex:1;"><label>Distance (m)</label><input type="number" step="0.01" id="l_c15_dist" placeholder="15.01" required></div>' +
+            '<div class="form-group" style="flex:1;"><label>STD (m)</label><input type="number" step="0.01" id="l_c15_std" value="0.00" required></div>' +
+            '<div class="form-group" style="flex:1;"><label>Valid Points</label><input type="number" id="l_c15_pts" value="9" required></div>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+
+      '<!-- Tilt Form -->' +
+      '<div id="lidar_tilt_box" style="display:none;">' +
+        '<div class="flex-row">' +
+          '<div class="form-group" style="flex:1;"><label>Robot ID</label><input type="text" id="l_t_robot" list="registeredRobotList" onfocus="hydrateRegisteredRobotList()" placeholder="e.g. AC3110 DVT1-1"></div>' +
+          '<div class="form-group" style="flex:1;"><label>Tester Name</label><input type="text" id="l_t_tester" list="registeredTesterList" onfocus="hydrateRegisteredTesterList()" placeholder="e.g. Ilham"></div>' +
+        '</div>' +
+        '<div class="flex-row">' +
+          '<div class="form-group" style="flex:1;"><label>Number of Bricks</label><input type="number" id="l_t_bricks" placeholder="5" required></div>' +
+          '<div class="form-group" style="flex:1;"><label>Detected Distance (m)</label><input type="number" step="0.01" id="l_t_dist" placeholder="15.05" required></div>' +
+        '</div>' +
+      '</div>';
+  }
+
+  function openLidarAccuracyEditModal(rowIndex) {
+    isEditing = true;
+    activeEditRowIndex = rowIndex;
+    activeLidarEditType = 'accuracy';
+    
+    var row = rawLidarResponse.accuracy.rows[rowIndex] || [];
+    
+    document.getElementById('modalTitle').innerText = 'Edit Accuracy Record (' + (row[0] || '') + ')';
+    document.getElementById('deleteBtn').style.display = 'inline-flex';
+    
+    document.getElementById('formBody').innerHTML = 
+      '<div class="form-group"><label>Robot ID (Read Only)</label><input type="text" value="' + (row[0] || '') + '" disabled style="opacity:0.7;"></div>' +
+      '<div class="flex-row">' +
+        '<div class="form-group" style="flex:1;"><label>Date</label><input type="text" id="l_a_date" value="' + (row[1] || '') + '"></div>' +
+        '<div class="form-group" style="flex:1;"><label>SW Version</label><input type="text" id="l_a_sw" value="' + (row[2] || '') + '"></div>' +
+      '</div>' +
+      '<div class="form-group"><label>Tester Name</label><input type="text" id="l_a_tester" list="registeredTesterList" onfocus="hydrateRegisteredTesterList()" value="' + (row[3] || '') + '" required></div>';
+    
+    document.getElementById('inputModal').style.display = 'flex';
+  }
+
+  function openLidarTiltEditModal(rowIndex) {
+    isEditing = true;
+    activeEditRowIndex = rowIndex;
+    activeLidarEditType = 'tilt';
+    
+    var row = rawLidarResponse.tilt.rows[rowIndex] || [];
+    
+    document.getElementById('modalTitle').innerText = 'Edit Tilt Record (' + (row[0] || '') + ')';
+    document.getElementById('deleteBtn').style.display = 'inline-flex';
+    
+    document.getElementById('formBody').innerHTML = 
+      '<div class="form-group"><label>Robot ID (Read Only)</label><input type="text" value="' + (row[0] || '') + '" disabled style="opacity:0.7;"></div>' +
+      '<div class="form-group"><label>Tester Name</label><input type="text" id="l_t_tester" list="registeredTesterList" onfocus="hydrateRegisteredTesterList()" value="' + (row[3] || '') + '" required></div>' +
+      '<div class="flex-row">' +
+        '<div class="form-group" style="flex:1;"><label>Number of Bricks</label><input type="number" id="l_t_bricks" value="' + (row[4] || '') + '"></div>' +
+        '<div class="form-group" style="flex:1;"><label>Detected Distance (m)</label><input type="number" step="0.01" id="l_t_dist" value="' + (row[5] || '') + '"></div>' +
+      '</div>';
+    
+    document.getElementById('inputModal').style.display = 'flex';
+  }
+
+  function toggleLidarFields() {
+    var type = document.getElementById('l_type').value;
+    document.getElementById('lidar_acc_box').style.display = (type === 'accuracy') ? 'block' : 'none';
+    document.getElementById('lidar_tilt_box').style.display = (type === 'tilt') ? 'block' : 'none';
+  }
+
+  function submitLidarForm() {
+    var lidarType = document.getElementById('l_type').value;
+    var payload = { lidarType: lidarType };
+
+    if (lidarType === 'accuracy') {
+      payload.robotId = document.getElementById('l_a_robot').value;
+      payload.date = document.getElementById('l_a_date').value;
+      payload.swVer = document.getElementById('l_a_sw').value;
+      payload.tester = document.getElementById('l_a_tester').value;
+
+      payload.runA = {
+        distance: document.getElementById('l_a5_dist').value,
+        std: document.getElementById('l_a5_std').value,
+        validPoints: document.getElementById('l_a5_pts').value
+      };
+      payload.runB = {
+        distance: document.getElementById('l_b10_dist').value,
+        std: document.getElementById('l_b10_std').value,
+        validPoints: document.getElementById('l_b10_pts').value
+      };
+      payload.runC = {
+        distance: document.getElementById('l_c15_dist').value,
+        std: document.getElementById('l_c15_std').value,
+        validPoints: document.getElementById('l_c15_pts').value
+      };
+    } else {
+      payload.robotId = document.getElementById('l_t_robot').value;
+      payload.tester = document.getElementById('l_t_tester').value;
+      payload.bricks = document.getElementById('l_t_bricks').value;
+      payload.detectedDist = document.getElementById('l_t_dist').value;
+    }
+    
+    google.script.run.withSuccessHandler(handleSuccess).withFailureHandler(handleFail).addLidarRecord(payload);
+  }
+
+  function submitForm(e) {
+    e.preventDefault();
+    var saveBtn = document.getElementById('saveBtn');
+    saveBtn.innerText = 'Saving...';
+    saveBtn.disabled = true;
+
+    if (isGenericModule(currentTab)) { submitGenericModuleForm(); }
+    else if (currentTab === 'wifi') { submitWifiForm(); } 
+    else { submitLidarForm(); }
+  }
+</script>

@@ -1,0 +1,1988 @@
+<script>
+  var isEditing = false;
+  var activeEditRowIndex = null;
+  var activeModuleOriginalRow = null;
+  var currentTab = 'overview';
+  var rawLidarResponse = null;
+  var rawWifiResponse = null;
+  var rawModuleResponse = null;
+  var loadRequestId = 0;
+  var activeLidarSubTab = 'all'; 
+  var traverseResultFilter = 'all';
+  var searchQuery = '';
+  var currentLang = localStorage.getItem('app_lang') || 'en';
+  var registeredTesterNames = [];
+
+  var I18N = {
+    en: {
+      app_title: "AC3110 DVT ISO",
+      nav_overview: "Overview",
+      nav_general: "General Info",
+      nav_static: "STATIC ISO",
+      nav_dynamic: "DYNAMIC ISO",
+      nav_accuracy: "ACCURACY & REPEATABILITY",
+      search_placeholder: "Search Robot ID, Tester...",
+      refresh: "Refresh",
+      add_record: "+ Add Record",
+      settings: "Settings",
+      copied: "Copied to clipboard",
+      actions: "Actions",
+      edit_record: "Edit Record",
+      delete_record: "Delete Record",
+      fleet_status: "Robot Fleet Telemetry",
+      units_tested: "Units tested",
+      pass_rate_kpi: "Average pass rate",
+      suite_runs: "Test suites",
+      warn_count: "Needs attention",
+      test_category: "Test category",
+      notes: "Notes",
+      smpl: "Sample",
+      pass_rate: "Pass rate",
+      fail_rate: "Fail rate",
+      sw_release: "SW release",
+      temperature: "Environment"
+    },
+    zh: {
+      app_title: "AC3110 測試管理",
+      nav_overview: "總覽",
+      nav_general: "架構規範資訊",
+      nav_static: "靜態 ISO",
+      nav_dynamic: "動態 ISO",
+      nav_accuracy: "精度與重複性",
+      search_placeholder: "搜尋機號、測試人員...",
+      refresh: "更新資料",
+      add_record: "+ 新增紀錄",
+      settings: "系統設定",
+      copied: "已複製至剪貼簿",
+      actions: "操作",
+      edit_record: "編輯紀錄",
+      delete_record: "刪除紀錄",
+      fleet_status: "機隊遙測狀態清單",
+      units_tested: "已測試機台",
+      pass_rate_kpi: "平均通過率",
+      suite_runs: "測試項目",
+      warn_count: "需注意",
+      test_category: "測試類別",
+      notes: "備註",
+      smpl: "樣本",
+      pass_rate: "通過率",
+      fail_rate: "失敗率",
+      sw_release: "軟體版本",
+      temperature: "環境"
+    }
+  };
+
+  function t(key) { return (I18N[currentLang] && I18N[currentLang][key]) ? I18N[currentLang][key] : key; }
+  
+  function getMatrixTitle() { return localStorage.getItem('custom_matrix_title') || 'Master Test Execution Matrix'; }
+  function getDvt1Label() { return localStorage.getItem('custom_dvt1_label') || 'AC3110-DVT1'; }
+  function getDvt2Label() { return localStorage.getItem('custom_dvt2_label') || 'AC3110-DVT2'; }
+
+  function toggleNavGroup(groupId, headerEl) {
+    var group = document.getElementById(groupId);
+    if (group) {
+      var willOpen = group.classList.contains('collapsed');
+      if (willOpen) closeOtherNavGroups(groupId);
+      group.classList.toggle('collapsed', !willOpen);
+      headerEl.classList.toggle('collapsed', !willOpen);
+      headerEl.classList.toggle('section-active', willOpen);
+    }
+  }
+
+  function closeOtherNavGroups(activeGroupId) {
+    document.querySelectorAll('.nav-group').forEach(function(group) {
+      if (group.id === activeGroupId) return;
+      group.classList.add('collapsed');
+      var header = group.previousElementSibling;
+      if (header && header.classList.contains('nav-section-header')) {
+        header.classList.add('collapsed');
+        header.classList.remove('section-active');
+      }
+    });
+  }
+
+  function collapseAllNavGroups() {
+    document.querySelectorAll('.nav-group').forEach(function(group) {
+      group.classList.add('collapsed');
+      var header = group.previousElementSibling;
+      if (header && header.classList.contains('nav-section-header')) {
+        header.classList.add('collapsed');
+        header.classList.remove('section-active');
+      }
+    });
+  }
+
+  function toggleSidebarRail(forceCollapsed) {
+    var collapsed = typeof forceCollapsed === 'boolean' ? forceCollapsed : !document.body.classList.contains('sidebar-rail');
+    document.body.classList.toggle('sidebar-rail', collapsed);
+    localStorage.setItem('iso_sidebar_rail', collapsed ? '1' : '0');
+    var toggle = document.querySelector('.sidebar-rail-toggle');
+    if (toggle) {
+      toggle.innerText = collapsed ? '›' : '‹';
+      toggle.setAttribute('aria-label', collapsed ? 'Expand navigation' : 'Collapse navigation');
+      toggle.title = collapsed ? 'Expand navigation' : 'Collapse navigation';
+    }
+  }
+
+  function openWorkspace(workspace) {
+    var firstTabs = { overview: 'overview', static: 'lidar', dynamic: 'ratedspeed', accuracy: 'accuracylaser' };
+    switchTab(firstTabs[workspace] || 'overview');
+  }
+
+  function updateWorkspaceTabs(tabId) {
+    var staticTabs = ['lidar','headdepth','basedepth','cliff','wifi'];
+    var dynamicTabs = ['ratedspeed','estop','turningwidth','clifflowerspeed','traversegap','narrow','apriltag'];
+    var accuracyTabs = ['accuracylaser','accuracyapriltag'];
+    var workspace = tabId === 'overview' || tabId === 'general' ? 'overview' :
+      (staticTabs.indexOf(tabId) !== -1 ? 'static' : (dynamicTabs.indexOf(tabId) !== -1 ? 'dynamic' : (accuracyTabs.indexOf(tabId) !== -1 ? 'accuracy' : 'overview')));
+    document.querySelectorAll('.workspace-tab').forEach(function(button) {
+      var active = button.dataset.workspace === workspace;
+      button.classList.toggle('active', active);
+      if (active) button.setAttribute('aria-current', 'page');
+      else button.removeAttribute('aria-current');
+    });
+  }
+
+  function switchTab(tabId) {
+    if (tabId !== currentTab) {
+      searchQuery = '';
+      var tabSearch = document.getElementById('tableSearchInput');
+      if (tabSearch) tabSearch.value = '';
+    }
+    currentTab = tabId;
+    
+    document.querySelectorAll('.nav-item').forEach(function(btn) { btn.classList.remove('active'); });
+    var activeBtn = document.getElementById('nav-' + tabId);
+    if (activeBtn) {
+      activeBtn.classList.add('active');
+      activeBtn.setAttribute('aria-current', 'page');
+      var parentGroup = activeBtn.closest('.nav-group');
+      if (parentGroup) {
+        closeOtherNavGroups(parentGroup.id);
+        parentGroup.classList.remove('collapsed');
+        var groupHeader = parentGroup.previousElementSibling;
+        if (groupHeader) {
+          groupHeader.classList.remove('collapsed');
+          groupHeader.classList.add('section-active');
+        }
+      } else {
+        collapseAllNavGroups();
+      }
+    }
+    document.querySelectorAll('.nav-item:not(.active)').forEach(function(btn) { btn.removeAttribute('aria-current'); });
+    localStorage.setItem('last_iso_tab', tabId);
+    updateWorkspaceTabs(tabId);
+
+    var activeLabel = activeBtn ? activeBtn.querySelector('.nav-label') : null;
+    var topTitle = (tabId === 'overview' || tabId === 'general')
+      ? (activeLabel ? activeLabel.innerText.trim() : (activeBtn ? activeBtn.innerText.trim() : 'Dashboard'))
+      : '';
+    document.getElementById('topHeaderTitle').innerText = topTitle;
+    var kicker = document.getElementById('headerKicker');
+    if (kicker) {
+      var staticTabs = ['lidar','headdepth','basedepth','cliff','wifi'];
+      var dynamicTabs = ['ratedspeed','estop','turningwidth','clifflowerspeed','traversegap','narrow','apriltag'];
+      kicker.innerText = tabId === 'overview' ? 'EXECUTION OVERVIEW' : (staticTabs.indexOf(tabId) !== -1 ? 'STATIC ISO' : (dynamicTabs.indexOf(tabId) !== -1 ? 'DYNAMIC ISO' : 'ACCURACY & REPEATABILITY'));
+    }
+    document.body.classList.remove('mobile-nav-open');
+
+    var cBar = document.getElementById('controlsBar');
+    var headerTools = document.getElementById('headerTools');
+    if (cBar) {
+      var hasSubTabs = tabId === 'lidar';
+      if (tabId === 'overview' || tabId === 'general') {
+        cBar.style.display = 'none';
+        if (headerTools) headerTools.style.display = 'none';
+      } else {
+        cBar.style.display = hasSubTabs ? 'flex' : 'none';
+        if (headerTools) headerTools.style.display = 'inline-flex';
+        var addBtn = document.getElementById('addRecordBtn');
+        var searchInput = document.getElementById('tableSearchInput');
+        if (addBtn) addBtn.style.display = (tabId === 'wifi' || tabId === 'lidar' || isGenericModule(tabId)) ? 'inline-flex' : 'none';
+        if (searchInput) searchInput.style.display = 'block';
+      }
+    }
+
+    renderSubPills();
+    loadCurrentTab();
+  }
+
+  function renderSubPills() {
+    var pillsDiv = document.getElementById('subPillsContainer');
+    if (currentTab === 'lidar') {
+      pillsDiv.innerHTML = 
+        '<div class="sub-pills">' +
+          '<button class="pill-btn ' + (activeLidarSubTab === 'all' ? 'active' : '') + '" onclick="switchLidarSubTab(\'all\')">All Modules</button>' +
+          '<button class="pill-btn ' + (activeLidarSubTab === 'accuracy' ? 'active' : '') + '" onclick="switchLidarSubTab(\'accuracy\')">Accuracy Collection</button>' +
+          '<button class="pill-btn ' + (activeLidarSubTab === 'tilt' ? 'active' : '') + '" onclick="switchLidarSubTab(\'tilt\')">Tilt & Angle Data</button>' +
+        '</div>';
+    } else {
+      pillsDiv.innerHTML = '';
+    }
+  }
+
+  function switchLidarSubTab(subTab) {
+    activeLidarSubTab = subTab;
+    renderSubPills();
+    if (rawLidarResponse) renderSplitLidarTable(rawLidarResponse);
+  }
+
+  function filterData(query) {
+    searchQuery = query.toLowerCase().trim();
+    if (currentTab === 'wifi' && rawWifiResponse) renderTable(rawWifiResponse);
+    if (currentTab === 'lidar' && rawLidarResponse) renderSplitLidarTable(rawLidarResponse);
+    if (isGenericModule(currentTab) && rawModuleResponse) renderSmartModule(rawModuleResponse);
+  }
+
+  function focusQuickSearch() {
+    var bar = document.getElementById('headerTools');
+    var search = document.getElementById('tableSearchInput');
+    if (!bar || !search || currentTab === 'overview' || currentTab === 'general') return;
+    bar.style.display = 'inline-flex';
+    search.style.display = 'block';
+    search.focus();
+    search.select();
+  }
+
+  function toggleLanguage() {
+    currentLang = (currentLang === 'en') ? 'zh' : 'en';
+    localStorage.setItem('app_lang', currentLang);
+    applyLanguage();
+    loadCurrentTab();
+  }
+
+  function applyLanguage() {
+    document.getElementById('langToggleText').innerText = (currentLang === 'en') ? '中文' : 'EN';
+    document.getElementById('appMainTitle').innerText = t('app_title');
+    
+    document.getElementById('nav_txt_overview').innerText = t('nav_overview');
+    document.getElementById('nav_txt_general').innerText = t('nav_general');
+    document.getElementById('nav_txt_static').innerText = t('nav_static');
+    document.getElementById('nav_txt_dynamic').innerText = t('nav_dynamic');
+    document.getElementById('nav_txt_accuracy').innerText = t('nav_accuracy');
+    document.getElementById('btn_txt_settings').innerText = t('settings');
+
+    var searchEl = document.getElementById('tableSearchInput');
+    if(searchEl) searchEl.placeholder = t('search_placeholder');
+    var refEl = document.getElementById('refreshBtnText');
+    if(refEl) refEl.innerText = t('refresh');
+    var addEl = document.getElementById('addRecordBtn');
+    if(addEl) addEl.innerText = t('add_record');
+  }
+
+  function confirmRefresh() {
+    var btn = document.getElementById('refreshBtn');
+    var text = document.getElementById('refreshBtnText');
+    btn.disabled = true;
+    text.innerText = 'Syncing…';
+    loadCurrentTab();
+    setTimeout(function() { btn.disabled = false; text.innerText = t('refresh'); }, 900);
+  }
+
+  function isGenericModule(tabId) {
+    return ['headdepth', 'basedepth', 'cliff', 'apriltag', 'ratedspeed', 'estop', 'turningwidth', 'clifflowerspeed', 'traversegap', 'narrow', 'accuracylaser', 'accuracyapriltag'].indexOf(tabId) !== -1;
+  }
+
+  function escapeHtml(value) {
+    return String(value === null || value === undefined ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+  }
+
+  function setSyncState(label, state) {
+    var dot = document.getElementById('syncDot');
+    var text = document.getElementById('syncText');
+    if (text) text.innerText = label;
+    if (dot) dot.className = 'sync-dot ' + (state || 'ready');
+  }
+
+  function renderGeneralInfoPage() {
+    return '<div class="general-info-page">' +
+      '<section class="general-hero"><div><div class="eyebrow">PRODUCT VALIDATION · AC3110 DVT</div><h1>ISO test workspace</h1><p>A single place to review robot readiness, sensor evidence, and execution results from Google Sheets.</p><div class="general-hero-meta"><span>EVT2 multi-robot validation</span><span>Google Sheets source</span><span>Static + Dynamic ISO</span></div></div>' +
+      '<div class="general-visual" aria-label="Robot test system illustration"><svg viewBox="0 0 360 210" role="img"><defs><linearGradient id="robotGlow" x1="0" x2="1"><stop stop-color="#818cf8"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs><path d="M35 172h290" stroke="#94a3b8" stroke-width="4" stroke-linecap="round"/><rect x="92" y="88" width="176" height="72" rx="18" fill="#f8fafc" stroke="#c4b5fd" stroke-width="4"/><rect x="120" y="40" width="120" height="66" rx="18" fill="#eef2ff" stroke="#a78bfa" stroke-width="4"/><circle cx="151" cy="72" r="11" fill="url(#robotGlow)"/><circle cx="209" cy="72" r="11" fill="url(#robotGlow)"/><path d="M180 40V23" stroke="#22d3ee" stroke-width="5" stroke-linecap="round"/><circle cx="180" cy="16" r="8" fill="#22c55e"/><path d="M115 124h130M115 141h78" stroke="#a5b4fc" stroke-width="7" stroke-linecap="round"/><circle cx="125" cy="174" r="19" fill="#0f172a"/><circle cx="235" cy="174" r="19" fill="#0f172a"/><path d="M48 111H88M272 111h40M53 105L35 85M307 105l18-20" stroke="#22d3ee" stroke-width="4" stroke-linecap="round"/><circle cx="29" cy="78" r="9" fill="#06b6d4"/><circle cx="331" cy="78" r="9" fill="#06b6d4"/><text x="180" y="198" text-anchor="middle" fill="#cbd5e1" font-size="10" font-family="Arial" font-weight="700">ROBOT UNDER TEST</text></svg><div class="visual-legend"><span><i class="legend-head"></i>Head depth camera</span><span><i class="legend-lidar"></i>LiDAR / IR sensors</span><span><i class="legend-base"></i>Drive base</span></div></div></section>' +
+      '<section class="general-section-grid"><article class="general-info-card"><div class="general-card-kicker static">STATIC ISO</div><h2>Sensor baseline</h2><p>Confirm perception and connectivity before motion testing.</p><div class="general-list"><div><b>LiDAR</b><span>Accuracy, tilt, distance and angle</span></div><div><b>Head / Base depth</b><span>Depth, obstacle and image evidence</span></div><div><b>IR Cliff + Wi-Fi</b><span>Cliff detection and wireless checks</span></div></div></article><article class="general-info-card"><div class="general-card-kicker dynamic">DYNAMIC ISO</div><h2>Robot behaviour</h2><p>Check how the robot behaves under controlled movement.</p><div class="general-list"><div><b>Rated speed + E-stop</b><span>Speed accuracy and stop response</span></div><div><b>Turning + cliff lower speed</b><span>Clearance, turning width and safety</span></div><div><b>Traverse + narrow corridor</b><span>Gap handling and path stability</span></div></div></article></section>' +
+      '<section class="general-bottom-grid"><article class="general-info-card"><div class="general-card-heading"><h2>Test environment</h2><span class="status-dot-label"><i></i> Target range</span></div><div class="environment-grid"><div><span>Temperature</span><b>10–30 °C</b><small>Target 25.5 °C</small></div><div><span>Humidity</span><b>0–80 %RH</b><small>Target 55 %RH</small></div><div><span>Illumination</span><b>100–1000 lux</b><small>Target 480–520 lux</small></div><div><span>Source</span><b>Google Sheets</b><small>Live workbook</small></div></div></article><article class="general-info-card"><div class="general-card-heading"><h2>Recommended workflow</h2><span class="workflow-count">4 steps</span></div><div class="workflow-list"><div><span>1</span><b>Choose robot</b><small>Start from Overview readiness.</small></div><div><span>2</span><b>Run Static ISO</b><small>Resolve sensor failures first.</small></div><div><span>3</span><b>Run Dynamic ISO</b><small>Verify motion and safety.</small></div><div><span>4</span><b>Review evidence</b><small>Open links and update records.</small></div></div></article></section>' +
+      '<div class="general-footnote">Use the left navigation to move between test groups. Green means pass, amber needs review, and red requires action.</div></div>';
+  }
+
+  var DASHBOARD_MODULES = [
+    { group: 'Static ISO', key: 'lidar', title: 'LiDAR', method: 'getLidarData' },
+    { group: 'Static ISO', key: 'headdepth', title: 'Head Depth Camera', method: 'getHeadDepthData' },
+    { group: 'Static ISO', key: 'basedepth', title: 'Base Depth Camera', method: 'getBaseDepthData' },
+    { group: 'Static ISO', key: 'cliff', title: 'IR Cliff', method: 'getIRCliffData' },
+    { group: 'Static ISO', key: 'wifi', title: 'Wi-Fi', method: 'getWifiData' },
+    { group: 'Dynamic ISO', key: 'ratedspeed', title: 'Rated Speed', method: 'getRatedSpeedData' },
+    { group: 'Dynamic ISO', key: 'estop', title: 'E-Stop', method: 'getEStopData' },
+    { group: 'Dynamic ISO', key: 'turningwidth', title: 'Turning Width', method: 'getTurningWidthData' },
+    { group: 'Dynamic ISO', key: 'clifflowerspeed', title: 'Cliff · Lower Speed', method: 'getCliffLowerSpeedData' },
+    { group: 'Dynamic ISO', key: 'traversegap', title: 'Traverse Gap', method: 'getTraverseGapData' },
+    { group: 'Dynamic ISO', key: 'narrow', title: 'Narrow Corridor', method: 'getNarrowCorridorData' },
+    { group: 'Dynamic ISO', key: 'apriltag', title: 'AprilTag', method: 'getAprilTagData' },
+    { group: 'Accuracy & Repeatability', key: 'accuracylaser', title: 'Laser Detection', method: 'getModuleData' },
+    { group: 'Accuracy & Repeatability', key: 'accuracyapriltag', title: 'AprilTag Detection', method: 'getModuleData' }
+  ];
+
+  function loadAllModulesDashboard() {
+    var requestId = ++loadRequestId;
+    var pending = DASHBOARD_MODULES.length;
+    var results = [];
+    var container = document.getElementById('tableContainer');
+    var cachedDashboard = localStorage.getItem('iso_dashboard_cache');
+    if (cachedDashboard) {
+      try {
+        renderAllModulesDashboard(JSON.parse(cachedDashboard));
+        setSyncState('Refreshing live data…', 'loading');
+      } catch (cacheError) {
+        container.innerHTML = renderDashboardLoading();
+      }
+    } else {
+      container.innerHTML = renderDashboardLoading();
+    }
+
+    DASHBOARD_MODULES.forEach(function(module) {
+      var runner = google.script.run.withSuccessHandler(function(data) {
+        results.push({ module: module, data: data });
+        pending--;
+        if (!pending && requestId === loadRequestId) {
+          renderAllModulesDashboard(results);
+          saveDashboardCache(results);
+        }
+      }).withFailureHandler(function(error) {
+        results.push({ module: module, data: { success: false, error: error.message || String(error) } });
+        pending--;
+        if (!pending && requestId === loadRequestId) {
+          renderAllModulesDashboard(results);
+          saveDashboardCache(results);
+        }
+      });
+
+      if (module.method === 'getModuleData') runner.getModuleData(module.key);
+      else runner[module.method]();
+    });
+  }
+
+  function renderDashboardLoading() {
+    return '<div class="dashboard-loading panel-card"><div class="spinner"></div><p>Loading all ISO modules…</p></div>';
+  }
+
+  function saveDashboardCache(results) {
+    try {
+      var compact = results.map(function(item) {
+        var data = item.data || {};
+        return { module: item.module, data: {
+          success: data.success,
+          title: data.title,
+          sheetName: data.sheetName,
+          headers: (data.headers || []).slice(0, 5),
+          rows: (data.rows || []).slice(0, 5),
+          summary: data.summary || {}
+        }};
+      });
+      localStorage.setItem('iso_dashboard_cache', JSON.stringify(compact));
+    } catch (cacheError) { }
+  }
+
+  function getDashboardRows(data) {
+    if (!data) return [];
+    if (data.rows) return data.rows;
+    if (data.accuracy && data.tilt) return (data.accuracy.rows || []).concat(data.tilt.rows || []);
+    return [];
+  }
+
+  function renderAllModulesDashboard(results) {
+    var groups = {};
+    results.forEach(function(item) {
+      if (!groups[item.module.group]) groups[item.module.group] = [];
+      groups[item.module.group].push(item);
+    });
+
+    var html = '<section class="dashboard-intro"><div><div class="eyebrow">ALL TEST MODULES</div><h1>ISO execution dashboard</h1><p>All test areas are visible here. Expand a module to inspect its latest records.</p></div><button class="btn-ctrl" onclick="loadCurrentTab()">Refresh all</button></section>';
+    Object.keys(groups).forEach(function(groupName) {
+      html += '<section class="dashboard-group"><div class="dashboard-group-heading"><h2>' + escapeHtml(groupName) + '</h2><span>' + groups[groupName].length + ' modules</span></div><div class="dashboard-module-grid">';
+      groups[groupName].forEach(function(item) { html += renderDashboardModule(item); });
+      html += '</div></section>';
+    });
+    document.getElementById('tableContainer').innerHTML = html;
+    setSyncState('All modules ready', 'ready');
+  }
+
+  function renderDashboardModule(item) {
+    var data = item.data || {};
+    var rows = getDashboardRows(data);
+    var summary = data.summary || {};
+    var status = data.success === false ? 'Unavailable' : (rows.length + ' records');
+    var table = '';
+
+    if (data.success === false) {
+      table = '<div class="dashboard-error">' + escapeHtml(data.error || 'Unable to read this module.') + '</div>';
+    } else if (data.headers && rows.length) {
+      var headers = data.headers.slice(0, 5);
+      table = '<div class="dashboard-table-wrap"><table class="dashboard-table"><thead><tr>' + headers.map(function(h) { return '<th>' + escapeHtml(h) + '</th>'; }).join('') + '</tr></thead><tbody>';
+      rows.slice(0, 5).forEach(function(row) { table += '<tr>' + headers.map(function(_, index) { return '<td>' + escapeHtml(row[index]) + '</td>'; }).join('') + '</tr>'; });
+      table += '</tbody></table></div>';
+    } else {
+      table = '<div class="dashboard-empty">No records available.</div>';
+    }
+
+    return '<details class="dashboard-module-card"><summary><span class="dashboard-module-title"><b>' + escapeHtml(item.module.title) + '</b><small>' + escapeHtml(data.sheetName || data.title || item.module.group) + '</small></span><span class="dashboard-module-status">' + escapeHtml(status) + '</span></summary><div class="dashboard-module-body"><div class="dashboard-mini-stats"><span>Pass <b>' + (summary.pass || 0) + '</b></span><span>Fail <b>' + (summary.fail || 0) + '</b></span><span>Review <b>' + (summary.warning || 0) + '</b></span></div>' + table + '<button class="btn-ctrl dashboard-open-button" onclick="switchTab(\'' + item.module.key + '\')">Open full module</button></div></details>';
+  }
+
+  function loadCurrentTab() {
+    var container = document.getElementById('tableContainer');
+    var requestId = ++loadRequestId;
+    setSyncState('Reading Google Sheets', 'loading');
+
+    if (currentTab === 'general') {
+      container.innerHTML = renderGeneralInfoPage();
+      setSyncState('Specification ready', 'ready');
+      google.script.run.withSuccessHandler(renderGeneralInfoImages).withFailureHandler(function() {}).getGeneralInfoImages();
+      return;
+    }
+
+    function renderGeneralInfoImages(response) {
+      if (!response || !response.success || !response.images || !response.images.length) return;
+      var page = document.querySelector('.general-info-page');
+      if (!page) return;
+      var html = '<section class="general-sheet-images"><div class="general-card-heading"><h2>Reference images</h2><span class="status-dot-label"><i></i>' + escapeHtml(response.sheetName || 'Google Sheets') + '</span></div><div class="general-sheet-image-grid">';
+      response.images.forEach(function(item) {
+        html += '<figure class="general-sheet-image"><div>' + renderImageCell(item.value, item.header, item.row, item.column, item.sheetName) + '</div><figcaption>' + escapeHtml(item.header) + '<small>Row ' + item.row + '</small></figcaption></figure>';
+      });
+      page.insertAdjacentHTML('beforeend', html + '</div></section>');
+    }
+
+    // Render the last successful response immediately. The server request
+    // below still refreshes it, but navigation never has to wait for Sheets.
+    var cachedTab = localStorage.getItem('iso_tab_cache_' + currentTab);
+    var hasCachedTab = false;
+    if (cachedTab) {
+      try { renderCachedTab(JSON.parse(cachedTab)); hasCachedTab = true; } catch (cacheError) { }
+    }
+
+    if (isGenericModule(currentTab)) {
+      if (!hasCachedTab) container.innerHTML = renderLoadingSkeleton();
+      var moduleEntryPoints = {
+        headdepth: 'getHeadDepthData', basedepth: 'getBaseDepthData', cliff: 'getIRCliffData',
+        ratedspeed: 'getRatedSpeedData', estop: 'getEStopData', turningwidth: 'getTurningWidthData',
+        clifflowerspeed: 'getCliffLowerSpeedData', traversegap: 'getTraverseGapData',
+        narrow: 'getNarrowCorridorData', apriltag: 'getAprilTagData',
+        accuracylaser: 'getModuleData', accuracyapriltag: 'getModuleData'
+      };
+      var moduleMethod = moduleEntryPoints[currentTab] || 'getModuleData';
+      var moduleRunner = google.script.run
+        .withSuccessHandler(function(response) {
+          if (requestId !== loadRequestId) return;
+          rawModuleResponse = response;
+          saveTabCache(currentTab, { type: 'module', data: response });
+          renderSmartModule(response);
+        })
+        .withFailureHandler(function(error) {
+          if (requestId !== loadRequestId) return;
+          showError(error);
+        });
+      if (moduleMethod === 'getModuleData') moduleRunner.getModuleData(currentTab);
+      else moduleRunner[moduleMethod]();
+      return;
+    }
+
+    if (!hasCachedTab) container.innerHTML = renderLoadingSkeleton();
+
+    if (currentTab === 'overview') {
+      google.script.run.withSuccessHandler(function(r){
+        if (requestId !== loadRequestId) return;
+        setSyncState('Live data ready','ready');
+        saveTabCache('overview', { type: 'overview', data: r });
+        renderOverview(r, rawHeadDepthResponse);
+        // Do not block the dashboard on the optional Head Depth summary.
+        // Load it after the first paint and update only that summary area.
+        setTimeout(function() {
+          if (requestId !== loadRequestId) return;
+          google.script.run.withSuccessHandler(function(headDepth) {
+            if (requestId !== loadRequestId) return;
+            rawHeadDepthResponse = headDepth;
+            renderOverview(r, headDepth);
+          }).withFailureHandler(function() {}).getHeadDepthData();
+        }, 150);
+      }).withFailureHandler(showError).getOverviewData();
+    } else if (currentTab === 'wifi') {
+      google.script.run.withSuccessHandler(function(r){ if(requestId===loadRequestId){ setSyncState('Live data ready','ready'); saveTabCache('wifi', { type:'wifi', data:r }); renderTable(r); }}).withFailureHandler(showError).getWifiData();
+    } else if (currentTab === 'lidar') {
+      google.script.run.withSuccessHandler(function(r){ if(requestId===loadRequestId){ setSyncState('Live data ready','ready'); saveTabCache('lidar', { type:'lidar', data:r }); renderSplitLidarTable(r); }}).withFailureHandler(showError).getLidarData();
+    }
+  }
+
+  function renderCachedTab(cached) {
+    if (!cached || !cached.data) return;
+    if (cached.type === 'overview') { renderOverview(cached.data, rawHeadDepthResponse); }
+    if (cached.type === 'module') { rawModuleResponse = cached.data; renderSmartModule(cached.data); }
+    if (cached.type === 'wifi') { rawWifiResponse = cached.data; renderTable(cached.data); }
+    if (cached.type === 'lidar') { rawLidarResponse = cached.data; renderSplitLidarTable(cached.data); }
+    setSyncState('Cached view · refreshing…', 'loading');
+  }
+
+  function saveTabCache(tabId, value) {
+    try {
+      if (value && value.data && value.type === 'module') {
+        var data = value.data;
+        value.data = Object.assign({}, data, { rows: (data.rows || []).slice(0, 20) });
+      }
+      localStorage.setItem('iso_tab_cache_' + tabId, JSON.stringify(value));
+    } catch (cacheError) { }
+  }
+
+  function renderLoadingSkeleton() {
+    return '<div class="smart-kpi-grid">' +
+      '<div class="skeleton skeleton-kpi"></div><div class="skeleton skeleton-kpi"></div>' +
+      '<div class="skeleton skeleton-kpi"></div><div class="skeleton skeleton-kpi"></div></div>' +
+      '<div class="panel-card skeleton-table"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-body"></div></div>';
+  }
+
+  function renderSmartModule(response) {
+    var container = document.getElementById('tableContainer');
+    if (!response || !response.success) {
+      setSyncState(response && response.missingSheet ? 'Sheet tab not matched' : 'Connection issue', 'error');
+      var available = response && response.availableSheets ? response.availableSheets.join(', ') : '';
+      container.innerHTML = '<div class="smart-empty panel-card"><div class="empty-icon">!</div>' +
+        '<h3>' + escapeHtml(response && response.title ? response.title : 'Module data') + ' needs a sheet tab</h3>' +
+        '<p>' + escapeHtml(response && response.error ? response.error : 'Unable to read this module.') + '</p>' +
+        (available ? '<details><summary>Available tabs</summary><p>' + escapeHtml(available) + '</p></details>' : '') + '</div>';
+      return;
+    }
+
+    if (response.key === 'traversegap') {
+      renderTraverseGap(response);
+      return;
+    }
+    if (response.key === 'cliff') {
+      renderIrCliffTable(response);
+      return;
+    }
+    var expandableKeys = ['basedepth', 'ratedspeed', 'estop', 'turningwidth', 'clifflowerspeed', 'narrow', 'apriltag', 'accuracylaser', 'accuracyapriltag'];
+    if (expandableKeys.indexOf(response.key) !== -1 && response.roles && response.roles.robot >= 0) {
+      renderExpandableIsoModule(response);
+      return;
+    }
+
+    setSyncState('Synced ' + response.updatedAt, 'ready');
+    var summary = response.summary || {};
+    var rows = filterRows(response.rows || []);
+    // Head Depth sheets often contain a second visual header row for the
+    // distance columns. It must not be rendered as an empty robot record.
+    if (response.key === 'headdepth') {
+      rows = rows.filter(function(item) {
+        var row = Array.isArray(item) ? item : (item && Array.isArray(item.row) ? item.row : []);
+        var text = row.map(function(value) { return String(value || '').trim().toLowerCase(); }).join(' ');
+        var robotValue = String(row[0] || '').trim();
+        var helperDistanceRow = /0\.3\s*m/.test(text) && /0\.5\s*m/.test(text) && /1\.0\s*m/.test(text);
+        var helperDescriptionRow = /is starting to shrink|becomes totally undetected/.test(text);
+        return !(helperDistanceRow || (helperDescriptionRow && !robotValue));
+      });
+    }
+    var compactFlatModule = response.key === 'cliff';
+    // Keep the module title, sheet source, purpose and records in one clean
+    // panel. The old hero repeated “DATA TABLE / Reading …” above it.
+    var html = '<div class="panel-card smart-table-card"><div class="panel-header"><div><div class="eyebrow">DATA EXPLORER</div><h1 class="module-panel-title">' + escapeHtml(response.title) + '</h1>' +
+      (response.key === 'headdepth' && response.purpose ? '<p class="module-purpose"><strong>Purpose</strong><span>' + escapeHtml(response.purpose) + '</span></p>' : '') + '</div>' +
+      '<span class="record-count">' + rows.length + (searchQuery ? ' matched' : ' rows') + '</span></div>';
+
+    if (!response.headers.length || !rows.length) {
+      html += '<div class="smart-empty compact"><h3>' + (searchQuery ? 'No matching records' : 'No data rows yet') + '</h3><p>' + (searchQuery ? 'Try a different Robot ID, tester, status, or value.' : 'The sheet is connected and ready for new records.') + '</p></div>';
+    } else {
+      html += '<div class="table-scroller"><table class="smart-table' + (compactFlatModule ? ' module-table-cliff' : '') + '"><thead>';
+      html += renderSmartTableHeader(response);
+      html += '</thead><tbody id="genericModuleTableBody">';
+      rows.forEach(function(item) {
+        var sourceRow = (response.headerRow || 1) + 1 + item.originalIndex;
+        html += '<tr>' + buildSmartRow(item.row, response.roles, response.headers, response.key, sourceRow, response.sheetName) + '</tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+    html += '</div>';
+    container.innerHTML = html;
+  }
+
+  function findHeaderIndex(headers, patterns, fallback) {
+    for (var i = 0; i < headers.length; i++) {
+      var header = String(headers[i] || '').toLowerCase();
+      for (var p = 0; p < patterns.length; p++) {
+        if (patterns[p].test(header)) return i;
+      }
+    }
+    return fallback === undefined ? -1 : fallback;
+  }
+
+  function renderIrCliffTable(response) {
+    var container = document.getElementById('tableContainer');
+    var headers = response.headers || [];
+    var rows = filterRows(response.rows || []);
+    var robotColumn = response.roles && response.roles.robot >= 0 ? response.roles.robot : 0;
+    var statusColumns = response.roles && response.roles.status ? response.roles.status : [];
+    var selectedColumns = [];
+    var frontColumns = [], rearColumns = [];
+    headers.forEach(function(header, column) {
+      if (column === robotColumn) return;
+      if (/front/i.test(String(header))) frontColumns.push(column);
+      if (/rear|back/i.test(String(header))) rearColumns.push(column);
+      if (statusColumns.indexOf(column) !== -1 || /front|rear|distance|height|cliff|result|status|value|sensor|detect|pass|fail/i.test(String(header))) selectedColumns.push(column);
+    });
+    if (!selectedColumns.length) selectedColumns = headers.map(function(_, index) { return index; }).filter(function(index) { return index !== robotColumn; }).slice(0, 6);
+    selectedColumns = selectedColumns.slice(0, 7);
+    var groups = { front: [], rear: [], other: [] };
+    rows.forEach(function(item) {
+      var text = (item.row || []).join(' ').toLowerCase();
+      var hasFrontData = frontColumns.some(function(column) { return String(item.row[column] || '').trim() !== ''; });
+      var hasRearData = rearColumns.some(function(column) { return String(item.row[column] || '').trim() !== ''; });
+      if (/front/.test(text) || (hasFrontData && !hasRearData)) groups.front.push(item.row);
+      else if (/rear|back/.test(text) || hasRearData) groups.rear.push(item.row);
+      else groups.other.push(item.row);
+    });
+    var groupLabels = [{ key:'front', label:'Front IR', description:'Front cliff sensor tests' }, { key:'rear', label:'Rear IR', description:'Rear cliff sensor tests' }, { key:'other', label:'Other IR', description:'Rows without a Front/Rear label' }];
+    var html = '<section class="module-hero compact-module-hero"><div><div class="eyebrow">SENSOR TABLE</div><h1>IR Cliff</h1><p>Front and rear cliff tests grouped for quick review</p></div><div class="module-health"><span class="health-pulse"></span> Connected</div></section>';
+    html += '<div class="ir-cliff-table-card"><div class="ir-cliff-table-note"><strong>' + rows.length + ' records</strong><span>Open a section to inspect its tests.</span></div>';
+    groupLabels.forEach(function(group) {
+      var groupRows = groups[group.key];
+      if (!groupRows.length) return;
+      html += '<details class="ir-cliff-section" open><summary><span class="ir-cliff-toggle">+</span><span><strong>' + group.label + '</strong><small>' + group.description + '</small></span><em>' + groupRows.length + ' rows</em></summary><div class="ir-cliff-scroll"><table class="smart-table module-table-cliff"><thead><tr><th>Robot ID</th>';
+      selectedColumns.forEach(function(column) { html += '<th title="' + escapeHtml(headers[column]) + '">' + escapeHtml(headers[column]) + '</th>'; });
+      html += '<th class="module-action-header">Action</th>';
+      html += '</tr></thead><tbody>';
+      groupRows.forEach(function(row) {
+        html += '<tr><td class="identity-cell">' + escapeHtml(row[robotColumn] || '—') + '</td>';
+        selectedColumns.forEach(function(column) {
+          var value = String(row[column] || '').trim();
+          var cell = !value ? '<span class="empty-cell">—</span>' : ((statusColumns.indexOf(column) !== -1 || /^(pass|fail|normal|ok|ng|done)$/i.test(value)) ? renderStatusBadge(value) : '<span aria-label="' + escapeHtml(value) + '">' + escapeHtml(value) + '</span>');
+          html += '<td>' + cell + '</td>';
+        });
+        var sourceRow = (response.headerRow || 1) + 1 + response.rows.indexOf(row);
+        html += '<td class="module-action-cell">' + renderGenericActionDropdown('cliff', sourceRow) + '</td>';
+        html += '</tr>';
+      });
+      html += '</tbody></table></div></details>';
+    });
+    container.innerHTML = html + '</div>';
+    setSyncState('Synced ' + response.updatedAt, 'ready');
+  }
+
+  function getTraverseGroups(response) {
+    var robotCol = response.roles && response.roles.robot >= 0 ? response.roles.robot : 0;
+    var groups = [];
+    var active = null;
+
+    (response.rows || []).forEach(function(row, rowIndex) {
+      var robotId = String(row[robotCol] || '').trim();
+      if (robotId) {
+        active = { id: robotId, firstRow: row, rows: [], sourceIndex: rowIndex };
+        groups.push(active);
+      }
+      if (active) active.rows.push(row);
+    });
+    return groups;
+  }
+
+  function getTraverseGroupState(group, statusColumns) {
+    var pass = 0, fail = 0, warning = 0;
+    group.rows.forEach(function(row) {
+      statusColumns.forEach(function(col) {
+        var value = String(row[col] || '').toLowerCase().trim();
+        if (!value) return;
+        if (/\bfail\b|\bng\b|not acceptable|reject|bad/.test(value)) fail++;
+        else if (/\bpass\b|\bok\b|acceptable|normal|done/.test(value)) pass++;
+        else if (/warn|pending|wait|progress|partial|retest/.test(value)) warning++;
+      });
+    });
+    return { pass: pass, fail: fail, warning: warning, key: fail ? 'fail' : (warning ? 'warning' : (pass ? 'pass' : 'pending')) };
+  }
+
+  function setTraverseResultFilter(filterKey) {
+    traverseResultFilter = filterKey;
+    if (rawModuleResponse) renderTraverseGap(rawModuleResponse);
+  }
+
+  function renderTraverseGap(response) {
+    var container = document.getElementById('tableContainer');
+    setSyncState('Synced ' + response.updatedAt, 'ready');
+
+    var headers = response.headers || [];
+    var groups = getTraverseGroups(response);
+    var robotCol = response.roles.robot >= 0 ? response.roles.robot : 0;
+    var testerCol = response.roles.tester;
+    var dateCol = response.roles.date;
+    var swCol = findHeaderIndex(headers, [/^sw\b/, /software/], -1);
+    var appCol = findHeaderIndex(headers, [/app.*version/, /application.*version/], -1);
+    var tempCol = findHeaderIndex(headers, [/temp/], -1);
+    var humidityCol = findHeaderIndex(headers, [/humidity/], -1);
+    var lightCol = findHeaderIndex(headers, [/illumination/, /lux/, /light/], -1);
+    var runCol = findHeaderIndex(headers, [/traverse.*test/, /gap.*test/, /slope.*test/, /^run\b/], Math.max(robotCol + 1, headers.length - 6));
+    var statusCols = response.roles.status || [];
+    var nonTemplate = groups.filter(function(group) { return group.id.toLowerCase().indexOf('template') === -1; });
+    var templateGroups = groups.filter(function(group) { return group.id.toLowerCase().indexOf('template') !== -1; });
+
+    var totalPass = 0, totalFail = 0, totalWarning = 0, totalRuns = 0;
+    nonTemplate.forEach(function(group) {
+      group.state = getTraverseGroupState(group, statusCols);
+      totalPass += group.state.pass;
+      totalFail += group.state.fail;
+      totalWarning += group.state.warning;
+      totalRuns += group.rows.filter(function(row) { return row.slice(runCol).join('').trim() !== ''; }).length;
+    });
+    var completed = totalPass + totalFail + totalWarning;
+    var passRate = completed ? Math.round(totalPass / completed * 100) : 0;
+    var attentionRobots = nonTemplate.filter(function(group) { return group.state.key === 'fail' || group.state.key === 'warning'; }).length;
+
+    var visibleGroups = nonTemplate.filter(function(group) {
+      var matchesSearch = !searchQuery || group.rows.some(function(row) { return row.join(' ').toLowerCase().indexOf(searchQuery) !== -1; });
+      var matchesFilter = traverseResultFilter === 'all' ||
+        (traverseResultFilter === 'attention' && (group.state.key === 'fail' || group.state.key === 'warning')) ||
+        group.state.key === traverseResultFilter;
+      return matchesSearch && matchesFilter;
+    });
+
+    var html = '<section class="module-hero traverse-hero"><div><div class="eyebrow">TEST RECORDS</div><h1>Traverse Gap</h1>' +
+      '<p>Robot-level inspection view from <strong>' + escapeHtml(response.sheetName) + '</strong></p></div>' +
+      '<div class="module-health"><span class="health-pulse"></span> Live workbook</div></section>';
+
+    html += '<div class="traverse-toolbar"><div class="result-filter" role="group" aria-label="Filter traverse results">' +
+      traverseFilterButton('all', 'All robots', nonTemplate.length) +
+      traverseFilterButton('pass', 'Passed', nonTemplate.filter(function(g){ return g.state.key === 'pass'; }).length) +
+      traverseFilterButton('attention', 'Needs attention', attentionRobots) +
+      '</div><span class="traverse-view-count">Showing ' + visibleGroups.length + ' of ' + nonTemplate.length + ' robots</span></div>';
+
+    if (!visibleGroups.length) {
+      html += '<div class="panel-card smart-empty compact"><div class="empty-icon">0</div><h3>No robots match this view</h3><p>Change the result filter or search for another Robot ID, tester, or run.</p></div>';
+    } else {
+      html += '<div class="traverse-groups">';
+      visibleGroups.forEach(function(group, groupIndex) {
+        html += renderTraverseGroup(group, groupIndex, headers, {
+          robot: robotCol, tester: testerCol, date: dateCol, sw: swCol, app: appCol,
+          temp: tempCol, humidity: humidityCol, light: lightCol, run: runCol, status: statusCols
+        }, !!searchQuery);
+      });
+      html += '</div>';
+    }
+
+    if (templateGroups.length) {
+      html += '<details class="test-plan-panel"><summary><span>Reference test plan</span><small>' + templateGroups[0].rows.length + ' configured runs</small></summary>' +
+        renderTraverseRunTable(templateGroups[0], headers, runCol, statusCols) + '</details>';
+    }
+    container.innerHTML = html;
+  }
+
+  function traverseFilterButton(key, label, count) {
+    return '<button class="result-filter-btn ' + (traverseResultFilter === key ? 'active' : '') + '" onclick="setTraverseResultFilter(\'' + key + '\')">' +
+      escapeHtml(label) + '<span>' + count + '</span></button>';
+  }
+
+  function valueAt(row, index) {
+    return index >= 0 && row[index] ? String(row[index]).trim() : '';
+  }
+
+  function renderTraverseGroup(group, groupIndex, headers, columns, forceOpen) {
+    var row = group.firstRow;
+    var stateLabel = group.state.key === 'pass' ? 'Passed' : (group.state.key === 'fail' ? 'Failed' : (group.state.key === 'warning' ? 'Needs attention' : 'Pending'));
+    var runCount = group.rows.filter(function(item) { return item.slice(columns.run).join('').trim() !== ''; }).length;
+    var environment = [];
+    if (valueAt(row, columns.temp)) environment.push(valueAt(row, columns.temp) + '°C');
+    if (valueAt(row, columns.humidity)) environment.push(valueAt(row, columns.humidity) + '% RH');
+    if (valueAt(row, columns.light)) environment.push(valueAt(row, columns.light) + ' lux');
+
+    return '<details class="traverse-robot-card state-' + group.state.key + '" ' + ((forceOpen || groupIndex === 0) ? 'open' : '') + '>' +
+      '<summary><div class="robot-summary-main"><span class="robot-avatar">' + escapeHtml(group.id.replace(/^AC3110\s*/i, '').substring(0, 3)) + '</span><div>' +
+        '<h3>' + escapeHtml(group.id) + '</h3><p>' + escapeHtml(valueAt(row, columns.tester) || 'Unassigned tester') + ' · ' + escapeHtml(valueAt(row, columns.date) || 'No date') +
+        (valueAt(row, columns.sw) ? ' · SW ' + escapeHtml(valueAt(row, columns.sw)) : '') + '</p></div></div>' +
+      '<div class="robot-summary-meta">' + (environment.length ? '<span class="environment-chip">' + escapeHtml(environment.join(' · ')) + '</span>' : '') +
+        '<span class="run-count">' + runCount + ' runs</span><span class="group-state ' + group.state.key + '">' + stateLabel + '</span><span class="summary-chevron">⌄</span></div></summary>' +
+      '<div class="robot-detail-strip">' +
+        traverseMeta('Tester', valueAt(row, columns.tester)) + traverseMeta('Test date', valueAt(row, columns.date)) +
+        traverseMeta('SW version', valueAt(row, columns.sw)) + traverseMeta('App version', valueAt(row, columns.app)) +
+        '</div>' + renderTraverseRunTable(group, headers, columns.run, columns.status) + '</details>';
+  }
+
+  function traverseMeta(label, value) {
+    return '<div><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(value || '—') + '</strong></div>';
+  }
+
+  function renderTraverseRunTable(group, headers, runCol, statusColumns) {
+    var detailCols = [];
+    for (var col = runCol; col < headers.length; col++) {
+      var hasData = group.rows.some(function(row) { return String(row[col] || '').trim() !== ''; });
+      if (hasData) detailCols.push(col);
+    }
+    var labels = detailCols.map(function(col, index) {
+      var label = String(headers[col] || '').trim();
+      if (/^column\s*\d+$/i.test(label)) label = index === 1 ? 'Test condition' : 'Measurement';
+      return label;
+    });
+    var dataRows = group.rows.filter(function(row) { return detailCols.some(function(col) { return String(row[col] || '').trim() !== ''; }); });
+
+    var html = '<div class="traverse-run-scroller"><table class="traverse-run-table"><thead><tr><th>#</th>';
+    labels.forEach(function(label) { html += '<th>' + escapeHtml(label) + '</th>'; });
+    html += '<th class="module-action-header">Action</th>';
+    html += '</tr></thead><tbody>';
+    dataRows.forEach(function(row, rowIndex) {
+      html += '<tr><td class="run-number">' + (rowIndex + 1) + '</td>';
+      detailCols.forEach(function(col) {
+        var value = String(row[col] || '').trim();
+        var isStatus = statusColumns.indexOf(col) !== -1 || /^(pass|fail|pending|normal|ok|ng)$/i.test(value);
+        var cell = isStatus ? renderStatusBadge(value) : (value ? escapeHtml(value) : '<span class="empty-cell">—</span>');
+        html += '<td>' + cell + '</td>';
+      });
+      var sourceRow = (rawModuleResponse && rawModuleResponse.headerRow ? rawModuleResponse.headerRow : 1) + 1 + group.rows.indexOf(row);
+      html += '<td class="module-action-cell">' + renderGenericActionDropdown('traversegap', sourceRow) + '</td>';
+      html += '</tr>';
+    });
+    return html + '</tbody></table></div>';
+  }
+
+  function smartKpi(label, value, detail, tone) {
+    return '<div class="smart-kpi ' + tone + '"><div class="smart-kpi-label">' + escapeHtml(label) + '</div><div class="smart-kpi-value">' + escapeHtml(value) + '</div><div class="smart-kpi-detail">' + escapeHtml(detail) + '</div></div>';
+  }
+
+  function groupModuleRowsByRobot(response) {
+    var robotCol = response.roles && response.roles.robot >= 0 ? response.roles.robot : 0;
+    var groups = [];
+    var groupById = {};
+    var active = null;
+    (response.rows || []).forEach(function(row, rowIndex) {
+      var robotId = String(row[robotCol] || '').trim();
+      if (robotId) {
+        if (!groupById[robotId]) {
+          groupById[robotId] = { id: robotId, rows: [], firstRow: row, sourceIndex: rowIndex };
+          groups.push(groupById[robotId]);
+        }
+        active = groupById[robotId];
+      }
+      if (active) active.rows.push(row);
+    });
+    return groups;
+  }
+
+  function firstGroupValue(group, column) {
+    if (column < 0) return '';
+    for (var i = 0; i < group.rows.length; i++) {
+      var value = String(group.rows[i][column] || '').trim();
+      if (value) return value;
+    }
+    return '';
+  }
+
+  function getGroupNumericHighlights(group, headers) {
+    var highlights = [];
+    headers.forEach(function(header, column) {
+      if (highlights.length >= 3 || !/distance|depth|height|angle|error|accuracy|rate/i.test(header)) return;
+      var values = [];
+      group.rows.forEach(function(row) {
+        var match = String(row[column] || '').replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
+        if (match) values.push(parseFloat(match[0]));
+      });
+      if (values.length) {
+        var average = values.reduce(function(sum, value) { return sum + value; }, 0) / values.length;
+        highlights.push({ label: header, value: Math.round(average * 100) / 100, samples: values.length });
+      }
+    });
+    return highlights;
+  }
+
+  function renderExpandableIsoModule(response) {
+    var container = document.getElementById('tableContainer');
+    setSyncState('Synced ' + response.updatedAt, 'ready');
+    var groups = groupModuleRowsByRobot(response);
+    var statusColumns = response.roles.status || [];
+    var testerCol = response.roles.tester;
+    var dateCol = response.roles.date;
+    var swCol = findHeaderIndex(response.headers, [/^sw\b/, /software.*version/], -1);
+
+    groups.forEach(function(group) { group.state = getTraverseGroupState(group, statusColumns); });
+    var visibleGroups = groups.filter(function(group) {
+      return !searchQuery || group.rows.some(function(row) { return row.join(' ').toLowerCase().indexOf(searchQuery) !== -1; });
+    });
+    var passing = groups.filter(function(group) { return group.state.key === 'pass'; }).length;
+    var attention = groups.filter(function(group) { return group.state.key === 'fail' || group.state.key === 'warning'; }).length;
+
+    if (response.key === 'basedepth' || /base\s+depth/i.test(String(response.title || ''))) {
+      renderBaseDepthCompactPage(response, groups);
+      return;
+    }
+
+    var phase = response.phase || 'ISO';
+    var html = '<section class="module-hero"><div><div class="eyebrow">ROBOT TEST RECORDS</div><h1>' + escapeHtml(response.title) + '</h1>' +
+      '<p>Select a robot to inspect its individual measurements from <strong>' + escapeHtml(response.sheetName) + '</strong></p></div>' +
+      '<div class="module-health"><span class="health-pulse"></span> Live workbook</div></section>';
+    html += '<div class="expandable-list-header"><div><span>ROBOT DATA</span><h2>Inspection records</h2></div><span>' + visibleGroups.length + ' robots</span></div>';
+
+    if (!visibleGroups.length) {
+      html += '<div class="panel-card smart-empty compact"><h3>No matching robot</h3><p>Try another Robot ID, tester, date, or measurement.</p></div>';
+    } else {
+      html += '<div class="expandable-data-list">';
+      visibleGroups.forEach(function(group) {
+        var tester = firstGroupValue(group, testerCol) || 'Unassigned';
+        var date = firstGroupValue(group, dateCol) || 'No date';
+        var sw = firstGroupValue(group, swCol) || 'SW not recorded';
+        var highlights = getGroupNumericHighlights(group, response.headers);
+        var stateLabel = group.state.key === 'pass' ? 'Passed' : (group.state.key === 'fail' ? 'Failed' : (group.state.key === 'warning' ? 'Needs attention' : 'Pending'));
+        html += '<details class="expandable-data-card state-' + group.state.key + '" ' + (searchQuery ? 'open' : '') + '><summary>' +
+          '<div class="expandable-card-identity"><span class="robot-avatar">' + escapeHtml(group.id.replace(/^AC3110\s*/i, '').substring(0, 3)) + '</span><div><h3>' + escapeHtml(group.id) + '</h3>' +
+          '<p>' + escapeHtml(tester) + ' · ' + escapeHtml(date) + ' · ' + escapeHtml(sw) + '</p></div></div>' +
+          '<div class="expandable-card-metrics">' + highlights.map(function(item) { return '<span><small>' + escapeHtml(item.label) + '</small><strong>' + escapeHtml(item.value) + '</strong></span>'; }).join('') +
+          '<span class="row-count-chip">' + group.rows.length + ' rows</span><span class="group-state ' + group.state.key + '">' + stateLabel + '</span><span class="summary-chevron">⌄</span></div></summary>' +
+          renderBaseDepthDetails(group, response) + '</details>';
+      });
+      html += '</div>';
+    }
+    container.innerHTML = html;
+  }
+
+  function renderBaseDepthCompactPage(response, groups) {
+    var container = document.getElementById('tableContainer');
+    var visibleGroups = groups.filter(function(group) {
+      return !searchQuery || group.rows.some(function(row) { return row.join(' ').toLowerCase().indexOf(searchQuery) !== -1; });
+    });
+    var html = '<section class="module-hero compact-module-hero"><div><div class="eyebrow">DATA TABLE</div><h1>Base depth camera</h1><p>Compact obstacle measurements · click a robot or <b>+</b> to inspect details</p></div><div class="module-health"><span class="health-pulse"></span> Synced</div></section>';
+    html += '<div class="base-depth-page-note"><strong>' + visibleGroups.length + ' robot records</strong><span>Edit values directly from the measurement table when a correction is needed.</span></div><div class="expandable-data-list base-depth-robot-list">';
+    if (!visibleGroups.length) html += '<div class="panel-card smart-empty compact"><h3>No matching robot</h3><p>Try another Robot ID or measurement.</p></div>';
+    visibleGroups.forEach(function(group) {
+      var state = group.state || getTraverseGroupState(group, response.roles.status || []);
+      html += '<details class="expandable-data-card base-depth-robot state-' + state.key + '"><summary><div class="expandable-card-identity"><span class="robot-avatar">D</span><div><h3>' + escapeHtml(group.id) + '</h3><p>' + group.rows.length + ' measurement rows</p></div></div><div class="expandable-card-metrics"><span class="group-state ' + state.key + '">' + escapeHtml(state.label || 'Review') + '</span><span class="summary-chevron">⌄</span></div></summary>' + renderBaseDepthDetails(group, response) + '</details>';
+    });
+    html += '</div>';
+    container.innerHTML = html;
+    setSyncState('Synced ' + response.updatedAt, 'ready');
+  }
+
+  function renderBaseDepthDetails(group, response) {
+    if (response.key === 'basedepth' || /base\s+depth/i.test(String(response.title || ''))) {
+      return renderBaseDepthObstacleTable(group, response);
+    }
+
+    var identityColumns = [response.roles.robot, response.roles.tester, response.roles.date];
+    var swColumn = findHeaderIndex(response.headers, [/^sw\b/, /software.*version/], -1);
+    identityColumns.push(swColumn);
+    var runColumn = findHeaderIndex(response.headers, [/^run\b/, /^trial\b/, /option/, /target.*distance/, /^distance/], -1);
+    var statusColumns = response.roles.status || [];
+    var html = '<div class="base-depth-run-intro"><div><strong>' + group.rows.length + ' measurement runs</strong><span>Open one run to inspect its recorded values.</span></div>' +
+      '<div class="base-depth-legend"><span class="pass">Pass</span><span class="fail">Fail</span></div></div><div class="base-depth-runs">';
+
+    group.rows.forEach(function(row, rowIndex) {
+      var metrics = [];
+      var evidence = [];
+      var statuses = [];
+      response.headers.forEach(function(header, column) {
+        if (identityColumns.indexOf(column) !== -1) return;
+        var value = String(row[column] || '').trim();
+        if (!value) return;
+        if (/^https?:\/\//i.test(value)) {
+          evidence.push(value);
+        } else if (statusColumns.indexOf(column) !== -1 || /^(pass|fail|done|pending|normal|ok|ng)$/i.test(value)) {
+          statuses.push(value);
+        } else {
+          var label = String(header || '').trim();
+          if (!label || /^column\s*\d+$/i.test(label) || /^#\s*\d*$/i.test(label)) label = 'Measurement ' + (metrics.length + 1);
+          metrics.push({ label: label, value: value, column: column });
+        }
+      });
+
+      if (!metrics.length && !statuses.length && !evidence.length) return;
+      var runName = runColumn >= 0 && row[runColumn] ? String(row[runColumn]) : 'Run ' + (rowIndex + 1);
+      var setupMetric = metrics.filter(function(metric) { return /distance|height|target|option|setup/i.test(metric.label); })[0] || metrics[0];
+      var state = statuses.some(function(value) { return /fail|\bng\b/i.test(value); }) ? 'fail' :
+        (statuses.some(function(value) { return /pass|done|normal|\bok\b/i.test(value); }) ? 'pass' : 'pending');
+
+      html += '<details class="base-depth-run state-' + state + '"><summary><div class="run-summary-left"><span class="run-index">' + (rowIndex + 1) + '</span><div><strong>' + escapeHtml(runName) + '</strong>' +
+        '<small>' + escapeHtml(setupMetric ? setupMetric.label + ': ' + setupMetric.value : metrics.length + ' recorded measurements') + '</small></div></div>' +
+        '<div class="run-summary-right"><span class="metric-count">' + metrics.length + ' metrics</span>' + statuses.slice(0, 2).map(function(status) { return renderStatusBadge(status); }).join('') +
+        '<span class="summary-chevron">⌄</span></div></summary><div class="base-depth-run-body"><div class="base-depth-metric-grid">';
+      metrics.forEach(function(metric) {
+        html += '<div class="base-depth-metric"><span>' + escapeHtml(metric.label) + '</span><strong title="' + escapeHtml(metric.value) + '">' + escapeHtml(metric.value) + '</strong></div>';
+      });
+      html += '</div>';
+      if (evidence.length) {
+        html += '<div class="base-depth-evidence">' + evidence.map(function(url, evidenceIndex) { return '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer">Evidence ' + (evidenceIndex + 1) + ' ↗</a>'; }).join('') + '</div>';
+      }
+      html += '<div class="base-depth-row-action"><button type="button" class="base-depth-edit-button" onclick="editBaseDepthRow(event, ' + ((response.headerRow || 1) + 1 + (group.sourceIndex || 0) + rowIndex) + ')">Edit row</button><button type="button" class="table-delete-button" onclick="deleteGenericRow(event, ' + ((response.headerRow || 1) + 1 + (group.sourceIndex || 0) + rowIndex) + ', \'basedepth\')">Delete</button></div>';
+      html += '</div></details>';
+    });
+    return html + '</div>';
+  }
+
+  function renderBaseDepthObstacleTable(group, response) {
+    var headers = response.headers || [];
+    var statusColumns = response.roles.status || [];
+    var identityColumns = [response.roles.robot, response.roles.tester, response.roles.date];
+    identityColumns.push(findHeaderIndex(headers, [/^sw\b/, /software.*version/], -1));
+    var obstacleColumn = findHeaderIndex(headers, [/obstacle/, /object.*type/, /target.*type/, /brick/, /object.*size/, /obstacle.*size/, /^setup$/], -1);
+    var runColumn = findHeaderIndex(headers, [/^run\b/, /^trial\b/, /sequence/, /^#$/], -1);
+
+    if (obstacleColumn < 0) {
+      for (var candidate = 0; candidate < headers.length; candidate++) {
+        if (identityColumns.indexOf(candidate) !== -1 || statusColumns.indexOf(candidate) !== -1) continue;
+        var sizeHits = group.rows.filter(function(row) { return /^\s*\d+(?:\.\d+)?\s*(?:cm|mm|m)\s*$/i.test(String(row[candidate] || '')); }).length;
+        if (sizeHits) { obstacleColumn = candidate; break; }
+      }
+    }
+
+    var tableColumns = [];
+    headers.forEach(function(header, column) {
+      if (identityColumns.indexOf(column) !== -1 || column === obstacleColumn) return;
+      var hasValue = group.rows.some(function(row) { return String(row[column] || '').trim() !== ''; });
+      if (hasValue) tableColumns.push(column);
+    });
+    tableColumns.sort(function(a, b) {
+      function priority(column) {
+        if (column === runColumn) return 0;
+        if (statusColumns.indexOf(column) !== -1) return 1;
+        if (/distance|depth|height|error|average|deviation/i.test(headers[column])) return 2;
+        if (/link|evidence|note|remark/i.test(headers[column])) return 4;
+        return 3;
+      }
+      return priority(a) - priority(b) || a - b;
+    });
+    tableColumns = tableColumns.slice(0, 8);
+
+    var obstacleGroups = [];
+    var byName = {};
+    var activeName = 'All measurements';
+    group.rows.forEach(function(row) {
+      var suppliedName = obstacleColumn >= 0 ? String(row[obstacleColumn] || '').trim() : '';
+      if (suppliedName) activeName = suppliedName;
+      if (!byName[activeName]) {
+        byName[activeName] = { name: activeName, rows: [] };
+        obstacleGroups.push(byName[activeName]);
+      }
+      byName[activeName].rows.push(row);
+    });
+
+    var html = '<div class="base-depth-table-intro"><div><strong>Obstacle measurement table</strong><span>Click <b>+</b> on an obstacle type to see its recorded measurements.</span></div>' +
+      '<span class="row-count-chip">' + obstacleGroups.length + ' obstacle types</span></div><div class="base-depth-obstacle-list">';
+
+    obstacleGroups.forEach(function(obstacle, obstacleIndex) {
+      var hasFail = obstacle.rows.some(function(row) { return statusColumns.some(function(column) { return /fail|\bng\b/i.test(String(row[column] || '')); }); });
+      var hasPass = obstacle.rows.some(function(row) { return statusColumns.some(function(column) { return /pass|done|normal|\bok\b/i.test(String(row[column] || '')); }); });
+      var state = hasFail ? 'fail' : (hasPass ? 'pass' : 'pending');
+      var stateLabel = hasFail ? 'Needs attention' : (hasPass ? 'Pass' : 'Not evaluated');
+      html += '<details class="base-depth-obstacle state-' + state + '"' + (searchQuery ? ' open' : '') + '><summary>' +
+        '<span class="obstacle-toggle" aria-hidden="true">+</span><span class="obstacle-name">' + escapeHtml(obstacle.name) + '</span>' +
+        '<span class="obstacle-runs">' + obstacle.rows.length + ' measurements</span><span class="group-state ' + state + '">' + stateLabel + '</span></summary>' +
+        '<div class="base-depth-table-wrap"><table class="base-depth-compact-table"><thead><tr><th>#</th>';
+      tableColumns.forEach(function(column) {
+        var label = String(headers[column] || '').trim();
+        if (!label || /^column\s*\d+$/i.test(label)) label = 'Measurement';
+        html += '<th title="' + escapeHtml(label) + '">' + escapeHtml(label) + '</th>';
+      });
+      html += '</tr></thead><tbody>';
+      obstacle.rows.forEach(function(row, rowIndex) {
+      var sourceRow = (response.headerRow || 1) + 1 + (group.sourceIndex || 0) + rowIndex;
+      html += '<tr><td>' + (rowIndex + 1) + '</td>';
+        tableColumns.forEach(function(column) {
+          var value = String(row[column] || '').trim();
+          var cell = '<span class="empty-cell">—</span>';
+          if (/^https?:\/\//i.test(value)) cell = '<a class="data-link" href="' + escapeHtml(value) + '" target="_blank" rel="noopener noreferrer">Open ↗</a>';
+          else if (statusColumns.indexOf(column) !== -1 || /^(pass|fail|done|pending|normal|ok|ng)$/i.test(value)) cell = renderStatusBadge(value);
+          else if (value) cell = '<span title="' + escapeHtml(value) + '">' + escapeHtml(value) + '</span>';
+          html += '<td>' + cell + '</td>';
+        });
+      html += '<td class="base-depth-edit-cell"><button type="button" class="base-depth-edit-button" onclick="editBaseDepthRow(event, ' + sourceRow + ')">Edit</button><button type="button" class="table-delete-button" onclick="deleteGenericRow(event, ' + sourceRow + ', \'basedepth\')">Delete</button></td></tr>';
+      });
+      html = html.replace('</tr></thead>', '<th>Action</th></tr></thead>');
+      html += '</tbody></table></div></details>';
+    });
+    return html + '</div>';
+  }
+
+  function editBaseDepthRow(event, sheetRow) {
+    if (event) event.stopPropagation();
+    if (!rawModuleResponse || !rawModuleResponse.headers) return;
+    var dataIndex = sheetRow - (rawModuleResponse.headerRow || 1) - 1;
+    var row = rawModuleResponse.rows[dataIndex];
+    if (!row) return;
+    isEditing = true;
+    activeEditRowIndex = sheetRow;
+    activeModuleOriginalRow = row.slice();
+    var deleteBtn = document.getElementById('deleteBtn');
+    var saveBtn = document.getElementById('saveBtn');
+    if (deleteBtn) deleteBtn.style.display = 'none';
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.innerText = 'Save changes'; }
+    renderGenericModuleModal(row, sheetRow);
+    document.getElementById('inputModal').style.display = 'flex';
+  }
+
+  function getDisplayImageUrl(value) {
+    var url = String(value || '').trim();
+    if (/^data:image\//i.test(url)) return url;
+    if (!/^https?:\/\//i.test(url)) return '';
+    var driveMatch = url.match(/(?:\/d\/|[?&]id=)([-\w]{20,})/i);
+    if (/docs\.google\.com\/sheets-images-rt/i.test(url) && typeof HEAD_DEPTH_TEST_IMAGE_URL !== 'undefined') {
+      return HEAD_DEPTH_TEST_IMAGE_URL;
+    }
+    if (driveMatch) {
+      return 'https://drive.google.com/thumbnail?id=' + driveMatch[1] + '&sz=w800';
+    }
+    return url;
+  }
+
+  function isImageCell(value, header, moduleKey) {
+    var text = String(value || '').trim();
+    var label = String(header || '').toLowerCase();
+    if (!/^https?:\/\//i.test(text) && !/^data:image\//i.test(text)) return false;
+    var likelyHeadDepthImage = moduleKey === 'headdepth' || /column\s*(?:9|10)|image|photo|picture|screenshot|evidence|capture|camera/i.test(label);
+    if (!likelyHeadDepthImage) return false;
+    if (!/link$/i.test(label)) return true;
+    return /image|photo|picture|screenshot|evidence|capture|camera|robot/i.test(label) ||
+      /\.(png|jpe?g|gif|webp|bmp)(?:[?#].*)?$/i.test(text) ||
+      /drive\.google\.com|googleusercontent\.com/i.test(text);
+  }
+
+  function getFriendlyModuleHeader(header, index, moduleKey) {
+    var label = String(header || '').trim();
+    if (moduleKey === 'headdepth' && /^(column\s*9|column\s*10)$/i.test(label)) return 'Distance from the robot';
+    if (moduleKey === 'headdepth' && /^column\s*12$/i.test(label)) return 'Detected distance';
+    return label;
+  }
+
+  function renderSmartTableHeader(response) {
+    var headers = response.headers || [];
+    if (response.key !== 'headdepth' || headers.length < 10) {
+      return '<tr>' + headers.map(function(header, index) { return '<th>' + escapeHtml(getFriendlyModuleHeader(header, index, response.key)) + '</th>'; }).join('') + '<th class="module-action-header">Action</th></tr>';
+    }
+    var groupStart = 7;
+    var groupEnd = 10;
+    var html = '<tr class="head-depth-group-row">';
+    for (var i = 0; i < headers.length; i++) {
+      if (i === groupStart) {
+        html += '<th colspan="3">Distance from the robot</th>';
+        i = groupEnd - 1;
+      } else if (i === groupEnd) {
+        html += '<th colspan="2">Object detection</th>';
+        i++;
+      } else if (i >= groupEnd + 2) {
+        html += '<th rowspan="2">' + escapeHtml(getFriendlyModuleHeader(headers[i], i, response.key)) + '</th>';
+      } else {
+        html += '<th rowspan="2">' + escapeHtml(getFriendlyModuleHeader(headers[i], i, response.key)) + '</th>';
+      }
+    }
+    html += '<th rowspan="2" class="module-action-header">Action</th></tr><tr class="head-depth-distance-row">';
+    var defaultDistances = ['0.3m', '0.5m', '1.0m'];
+    for (var distanceColumn = groupStart; distanceColumn < groupEnd; distanceColumn++) {
+      var distance = (response.distanceLabels && response.distanceLabels[distanceColumn - groupStart]) || '';
+      (response.rows || []).some(function(row) {
+        var value = String(row[distanceColumn] || '').trim();
+        if (!distance && /^\d+(?:\.\d+)?\s*(?:m|cm)$/i.test(value)) { distance = value; return true; }
+        return false;
+      });
+      html += '<th>' + escapeHtml(distance || defaultDistances[distanceColumn - groupStart]) + '</th>';
+    }
+    html += '<th>Distance where the object</th><th>Detected distance</th>';
+    return html + '</tr>';
+  }
+
+  function renderImageCell(value, header, sheetRow, sheetColumn, sheetName) {
+    var imageUrl = getDisplayImageUrl(value);
+    var safeUrl = escapeHtml(imageUrl);
+    var safeOriginalUrl = escapeHtml(String(value || '').trim());
+    var safeTitle = escapeHtml(typeof getHeadDepthImageTitle === 'function' ? getHeadDepthImageTitle(header) : (header || 'Image'));
+    var encodedTitle = encodeURIComponent(safeTitle);
+    return '<a class="sheet-image-link head-depth-inline-image" href="' + safeOriginalUrl + '" target="_blank" rel="noopener" ' +
+      'title="Open ' + safeTitle + ' in a new tab">' +
+      '<span class="sheet-image-link-label" aria-hidden="true">↗</span>' +
+      '</a>';
+  }
+
+  function handleSheetImageError(image) {
+    var driveId = image.src.match(/(?:[?&]id=|\/d\/)([-\w]{20,})/i);
+    var retry = Number(image.dataset.retry || 0);
+    if (driveId && retry < 2 && !image.dataset.sheetName) {
+      image.dataset.retry = String(retry + 1);
+      if (retry === 0) {
+        image.src = 'https://drive.google.com/thumbnail?id=' + encodeURIComponent(driveId[1]) + '&sz=w1000';
+      } else {
+        image.src = 'https://lh3.googleusercontent.com/d/' + encodeURIComponent(driveId[1]) + '=w1000';
+      }
+      return;
+    }
+    if (!image.dataset.proxyAttempted && image.dataset.sheetName && image.dataset.sheetRow && image.dataset.sheetColumn) {
+      image.dataset.proxyAttempted = '1';
+      var button = image.parentNode;
+      var label = button && button.querySelector('.sheet-image-zoom');
+      if (label) label.innerText = 'Loading';
+      google.script.run.withSuccessHandler(function(result) {
+        if (result && result.success && result.dataUrl) {
+          image.style.display = 'block';
+          image.src = result.dataUrl;
+          if (button) button.classList.remove('image-unavailable');
+          if (label) label.innerText = 'Preview';
+          return;
+        }
+        markSheetImageUnavailable(image);
+      }).withFailureHandler(function() { markSheetImageUnavailable(image); }).getIsoImageData({
+        sheetName: image.dataset.sheetName,
+        row: Number(image.dataset.sheetRow),
+        column: Number(image.dataset.sheetColumn)
+      });
+      return;
+    }
+    markSheetImageUnavailable(image);
+  }
+
+  function markSheetImageUnavailable(image) {
+    image.style.display = 'none';
+    var wrapper = image.parentNode;
+    if (wrapper) {
+      var fallback = wrapper.querySelector('.fallback-link');
+      if (fallback) fallback.style.display = 'inline-block';
+    }
+  }
+
+  function openSheetImageButtonPreview(button) {
+    var image = button.querySelector('.sheet-image-thumbnail');
+    if (!image) return;
+    if (!image.src || image.style.display === 'none' || !image.naturalWidth) {
+      requestSheetImageProxy(image, function() {
+        if (image.src && image.naturalWidth) {
+          openSheetImagePreview(encodeURIComponent(image.src), encodeURIComponent(button.dataset.imageTitle || 'Head depth image'));
+        } else if (image.dataset.originalUrl) {
+          openSheetImagePreview(encodeURIComponent(image.dataset.originalUrl), encodeURIComponent(button.dataset.imageTitle || 'Head depth image'));
+        }
+      });
+      return;
+    }
+    openSheetImagePreview(encodeURIComponent(image.src), encodeURIComponent(button.dataset.imageTitle || 'Head depth image'));
+  }
+
+  function requestSheetImageProxy(image, onComplete) {
+    if (!image || !image.dataset.sheetName) return;
+    if (image.dataset.proxyAttempted) {
+      if (onComplete) onComplete();
+      return;
+    }
+    if (/^data:image\//i.test(image.getAttribute('src') || '')) {
+      if (onComplete) onComplete();
+      return;
+    }
+    image.dataset.proxyAttempted = '1';
+    var button = image.parentNode;
+    var label = button && button.querySelector('.sheet-image-zoom');
+    if (label) label.innerText = '…';
+    google.script.run.withSuccessHandler(function(result) {
+      if (result && result.success && result.dataUrl) {
+        image.style.display = 'block';
+        image.src = result.dataUrl;
+        if (button) button.classList.remove('image-unavailable');
+        if (label) label.innerText = '↗';
+        if (onComplete) onComplete();
+      } else {
+        markSheetImageUnavailable(image);
+        if (onComplete) onComplete();
+      }
+    }).withFailureHandler(function() { markSheetImageUnavailable(image); if (onComplete) onComplete(); }).getIsoImageData({
+      sheetName: image.dataset.sheetName,
+      row: Number(image.dataset.sheetRow),
+      column: Number(image.dataset.sheetColumn)
+    });
+  }
+
+  function openSheetImagePreview(encodedUrl, encodedTitle) {
+    var url = decodeURIComponent(encodedUrl);
+    var title = decodeURIComponent(encodedTitle);
+    var image = document.getElementById('sheetImagePreview');
+    document.getElementById('sheetImagePreviewTitle').innerText = title;
+    document.getElementById('sheetImageOpenLink').href = url;
+    image.style.display = 'block';
+    image.style.opacity = '1';
+    image.src = url;
+    image.onerror = function() {
+      image.style.display = 'none';
+      var stage = document.querySelector('.image-preview-stage');
+      var frame = document.getElementById('sheetImageFrame');
+      if (!frame) {
+        frame = document.createElement('iframe');
+        frame.id = 'sheetImageFrame';
+        frame.title = 'Google Sheets image preview';
+        frame.loading = 'eager';
+        frame.referrerPolicy = 'no-referrer';
+        stage.appendChild(frame);
+      }
+      frame.src = url;
+      frame.style.display = 'block';
+    };
+    var existingFrame = document.getElementById('sheetImageFrame');
+    if (existingFrame) existingFrame.style.display = 'none';
+    document.getElementById('sheetImageModal').style.display = 'flex';
+  }
+
+  function closeSheetImagePreview() {
+    document.getElementById('sheetImageModal').style.display = 'none';
+    var image = document.getElementById('sheetImagePreview');
+    image.src = '';
+    var frame = document.getElementById('sheetImageFrame');
+    if (frame) { frame.src = ''; frame.style.display = 'none'; }
+  }
+
+  function buildSmartRow(row, roles, headers, moduleKey, sourceRow, sheetName) {
+    var html = '';
+    row.forEach(function(value, index) {
+      var text = String(value || '').trim();
+      var lower = text.toLowerCase();
+      var content;
+      var isHeadDepthLink = moduleKey === 'headdepth' && index === headers.length - 1;
+
+      if (isImageCell(text, headers[index], moduleKey) || (isHeadDepthLink && /^https?:\/\//i.test(text))) {
+        content = renderImageCell(text, headers[index], sourceRow, index + 1, sheetName);
+      } else if (isHeadDepthLink && !text) {
+        content = '<span class="empty-cell">No link</span>';
+      } else if (/^https?:\/\//i.test(text)) {
+        content = '<a class="data-link" href="' + escapeHtml(text) + '" target="_blank" rel="noopener noreferrer">Open evidence ↗</a>';
+      } else if ((roles.status || []).indexOf(index) !== -1 || /^(pass|fail|done|pending|normal|acceptable|bad|ok|ng)$/i.test(text)) {
+        content = renderStatusBadge(text);
+      } else if (!text) {
+        content = '<span class="empty-cell">—</span>';
+      } else {
+        content = '<span title="' + escapeHtml(text) + '">' + escapeHtml(text) + '</span>';
+      }
+      html += '<td' + (index === roles.robot ? ' class="identity-cell"' : '') + '>' + content + '</td>';
+    });
+    if (sourceRow) html += '<td class="module-action-cell">' + renderGenericActionDropdown(moduleKey, sourceRow) + '</td>';
+    return html;
+  }
+
+  function deleteGenericRow(event, sheetRow, moduleKey) {
+    if (event) event.stopPropagation();
+    openDeleteConfirm(moduleKey, sheetRow, function() {
+      var toast = document.getElementById('copyToast');
+      toast.innerHTML = '<div class="spinner" style="width:16px;height:16px;border-top-color:#ffffff;"></div><span>Deleting record…</span>';
+      toast.style.display = 'flex';
+      google.script.run.withSuccessHandler(function(response) {
+        toast.style.display = 'none';
+        if (response && response.success) {
+          localStorage.removeItem('iso_tab_cache_' + moduleKey);
+          loadCurrentTab();
+        } else {
+          handleFail(response && response.error ? response.error : 'Delete failed.');
+        }
+      }).withFailureHandler(handleFail).deleteIsoModuleRecord({ moduleKey: moduleKey, sheetRow: sheetRow });
+    });
+  }
+
+  function openDeleteConfirm(moduleKey, sheetRow, onConfirm) {
+    var modal = document.getElementById('deleteConfirmModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'deleteConfirmModal';
+      modal.className = 'modal-overlay delete-confirm-overlay';
+      document.body.appendChild(modal);
+    }
+    modal.innerHTML = '<div class="delete-confirm-panel" role="dialog" aria-modal="true" aria-labelledby="deleteConfirmTitle">' +
+      '<div class="delete-confirm-icon">!</div><div><div class="eyebrow">PERMANENT ACTION</div><h3 id="deleteConfirmTitle">Delete ISO record?</h3>' +
+      '<p>This will permanently remove the selected record from Google Sheets.</p><div class="delete-confirm-meta"><span>Module</span><strong>' + escapeHtml(moduleKey) + '</strong><span>Sheet row</span><strong>' + escapeHtml(sheetRow) + '</strong></div></div>' +
+      '<div class="delete-confirm-actions"><button type="button" class="btn-ctrl" onclick="closeDeleteConfirm()">Cancel</button><button type="button" class="delete-confirm-danger" id="deleteConfirmButton">Delete record</button></div></div>';
+    modal.style.display = 'flex';
+    document.getElementById('deleteConfirmButton').onclick = function() {
+      closeDeleteConfirm();
+      onConfirm();
+    };
+  }
+
+  function closeDeleteConfirm() {
+    var modal = document.getElementById('deleteConfirmModal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  function renderTable(response) {
+    rawWifiResponse = response;
+    var container = document.getElementById('tableContainer');
+    if (!response || response.error) {
+      container.innerHTML = '<div class="panel-card"><div style="color:#ef4444; padding:2rem; text-align:center;">' + (response ? response.error : 'Error loading Wi-Fi data') + '</div></div>';
+      return;
+    }
+
+    var hideFirstCol = (response.headers[0] === '#' || response.headers[0].trim() === '');
+    var startIndex = hideFirstCol ? 1 : 0;
+
+    var html = '<div class="panel-card"><div class="panel-header"><h2>Wi-Fi Distance & Antenna Diversity</h2></div><div class="table-scroller"><table><thead><tr>';
+    for (var i = startIndex; i < response.headers.length; i++) {
+      html += '<th>' + (response.headers[i] || '-') + '</th>';
+    }
+    html += '<th>' + t('actions') + '</th></tr></thead><tbody>';
+    
+    var filteredRows = filterRows(response.rows);
+    if (filteredRows.length === 0) {
+      html += '<tr><td colspan="25" style="padding:2rem; text-align:center; color:var(--text-muted);">No records found.</td></tr>';
+    } else {
+      filteredRows.forEach(function(item) {
+        html += '<tr>' + buildRowCells(item.row, startIndex) + '<td>' + renderActionDropdown('wifi', item.originalIndex) + '</td></tr>';
+      });
+    }
+    html += '</tbody></table></div></div>';
+    container.innerHTML = html;
+  }
+
+  function renderSplitLidarTable(response) {
+    rawLidarResponse = response;
+    var container = document.getElementById('tableContainer');
+    if (!response || response.error) {
+      container.innerHTML = '<div class="panel-card"><div style="color:#ef4444; padding:2rem; text-align:center;">' + (response ? response.error : 'Error loading LiDAR data') + '</div></div>';
+      return;
+    }
+
+    var html = '';
+
+    if (activeLidarSubTab === 'all' || activeLidarSubTab === 'accuracy') {
+      var groupedAccuracy = groupLidarAccuracyPivoted(response.accuracy.rows);
+      html += '<div class="panel-card lidar-panel"><div class="panel-header"><h2>LiDAR Accuracy Data Collection</h2></div><div class="table-scroller"><table class="lidar-table lidar-accuracy-table">' +
+        '<colgroup><col style="width:18%"><col style="width:11%"><col style="width:14%"><col style="width:9%"><col style="width:14%"><col style="width:14%"><col style="width:14%"><col style="width:6%"></colgroup><thead><tr>' +
+        '<th>Robot ID</th><th>Date</th><th>SW Version</th><th>Tester</th><th>A - 5m</th><th>B - 10m</th><th>C - 15m</th><th>' + t('actions') + '</th>' +
+      '</tr></thead><tbody>';
+
+      if (groupedAccuracy.length === 0) {
+        html += '<tr><td colspan="8" style="padding:2rem; text-align:center; color:var(--text-muted);">No accuracy records found.</td></tr>';
+      } else {
+        groupedAccuracy.forEach(function(item) {
+          if (searchQuery !== '' && item.robotId.toLowerCase().indexOf(searchQuery) === -1 && item.tester.toLowerCase().indexOf(searchQuery) === -1) return;
+          html += '<tr>' +
+            '<td class="lidar-robot-id" title="' + escapeHtml(item.robotId) + '">' + escapeHtml(item.robotId) + '</td>' +
+            '<td>' + escapeHtml(item.date) + '</td><td>' + escapeHtml(item.swVer) + '</td><td>' + escapeHtml(item.tester) + '</td>' +
+            '<td>' + renderRunPill(item.runA) + '</td><td>' + renderRunPill(item.runB) + '</td><td>' + renderRunPill(item.runC) + '</td>' +
+            '<td>' + renderActionDropdown('lidar_acc', item.startRowIndex) + '</td>' +
+          '</tr>';
+        });
+      }
+      html += '</tbody></table></div></div>';
+    }
+
+    if (activeLidarSubTab === 'all' || activeLidarSubTab === 'tilt') {
+      var tiltRows = filterRows(response.tilt.rows);
+      html += '<div class="panel-card lidar-panel"><div class="panel-header"><h2>LiDAR Tilt Data Collection</h2></div><div class="table-scroller"><table class="lidar-table lidar-tilt-table">' +
+        '<colgroup><col style="width:10%"><col style="width:8%"><col style="width:9%"><col style="width:7%"><col style="width:8%"><col style="width:9%"><col style="width:8%"><col style="width:8%"><col style="width:12%"><col style="width:6%"><col style="width:6%"><col style="width:5%"><col style="width:4%"></colgroup><thead><tr>';
+      response.tilt.headers.forEach(function(h) { html += '<th>' + (h || '-') + '</th>'; });
+      html += '<th>' + t('actions') + '</th></tr></thead><tbody>';
+      
+      if (tiltRows.length === 0) {
+        html += '<tr><td colspan="15" style="padding:2rem; text-align:center; color:var(--text-muted);">No tilt records found.</td></tr>';
+      } else {
+        tiltRows.forEach(function(item) { 
+          html += '<tr>' + buildRowCells(item.row, 0) + '<td>' + renderActionDropdown('lidar_tilt', item.originalIndex) + '</td></tr>'; 
+        });
+      }
+      html += '</tbody></table></div></div>';
+    }
+    container.innerHTML = html;
+  }
+
+  function groupLidarAccuracyPivoted(rows) {
+    var groups = [];
+    var currentGroup = null;
+    rows.forEach(function(row, idx) {
+      if (!row || row.join('').trim() === '') return;
+      var robotId = row[0] ? row[0].trim() : '';
+      if (robotId !== '') {
+        currentGroup = { startRowIndex: idx, robotId: robotId, date: row[1] || '-', swVer: row[2] || '-', tester: row[3] || '-', runA: null, runB: null, runC: null };
+        groups.push(currentGroup);
+      }
+      if (currentGroup) {
+        var opt = (row[4] || '').toUpperCase();
+        var runData = { distance: row[5] || '-', passFail: row[9] || '-' };
+        if (opt.indexOf('A') !== -1) currentGroup.runA = runData;
+        else if (opt.indexOf('B') !== -1) currentGroup.runB = runData;
+        else if (opt.indexOf('C') !== -1) currentGroup.runC = runData;
+      }
+    });
+    return groups;
+  }
+
+  function renderRunPill(run) {
+    if (!run) return '<span style="color:var(--text-muted);">-</span>';
+    return '<div class="lidar-run-pill"><span class="lidar-distance">' + escapeHtml(run.distance) + 'm</span>' + renderStatusBadge(run.passFail) + '</div>';
+  }
+
+  function filterRows(rows) {
+    if (!rows) return [];
+    var result = [];
+    rows.forEach(function(row, idx) {
+      if (!row || row.join('').trim() === '') return;
+      if (searchQuery === '' || row.join(' ').toLowerCase().indexOf(searchQuery) !== -1) {
+        result.push({ row: row, originalIndex: idx });
+      }
+    });
+    return result;
+  }
+
+  function renderStatusBadge(text) {
+    var cellText = (text !== null && text !== undefined) ? text.toString().trim() : '';
+    var lowerText = cellText.toLowerCase();
+    var safeText = escapeHtml(cellText || '-');
+
+    if (lowerText === 'pass' || lowerText === 'acceptable' || lowerText === 'normal' || lowerText === 'ok' || lowerText === 'done') {
+      return '<span class="status-chip pass" aria-label="' + safeText + '">' + safeText + '</span>';
+    } else if (lowerText === 'fail' || lowerText === 'bad' || lowerText === 'ng') {
+      return '<span class="status-chip fail" aria-label="' + safeText + '">' + safeText + '</span>';
+    } else if (lowerText.indexOf('tilt up') !== -1 || lowerText.indexOf('progress') !== -1 || lowerText.indexOf('warn') !== -1 || lowerText.indexOf('pending') !== -1 || lowerText.indexOf('wait') !== -1) {
+      return '<span class="status-chip warn" aria-label="' + safeText + '">' + safeText + '</span>';
+    }
+    return '<span class="status-chip neutral" aria-label="' + safeText + '">' + safeText + '</span>';
+  }
+
+  function buildRowCells(row, startIdx) {
+    var html = '';
+    for(var i = startIdx; i < row.length; i++) {
+      var cellText = (row[i] !== null && row[i] !== undefined) ? row[i].toString().trim() : '';
+      var lowerText = cellText.toLowerCase();
+
+      if (lowerText.indexOf('http://') === 0 || lowerText.indexOf('https://') === 0) {
+        html += '<td><a href="' + cellText + '" target="_blank" style="color:#2563eb; text-decoration:none; font-weight:600;">Link &#8599;</a></td>';
+      } else if (lowerText === 'pass' || lowerText === 'acceptable' || lowerText === 'normal') {
+        html += '<td><span class="status-chip pass">' + cellText + '</span></td>';
+      } else if (lowerText === 'fail' || lowerText === 'bad') {
+        html += '<td><span class="status-chip fail">' + cellText + '</span></td>';
+      } else if (lowerText.indexOf('tilt up') !== -1 || lowerText.indexOf('warn') !== -1) {
+        html += '<td><span class="status-chip warn">' + cellText + '</span></td>';
+      } else if (cellText === '' || cellText === '-') {
+        html += '<td style="color:var(--text-muted);">-</td>';
+      } else {
+            html += '<td ' + (i===startIdx ? 'style="font-weight:700; color:var(--text-primary);"' : '') + ' aria-label="' + escapeHtml(cellText) + '">' + escapeHtml(cellText) + '</td>';
+      }
+    }
+    return html;
+  }
+
+  function renderActionDropdown(type, index) {
+    var menuId = type + '_' + index;
+    var editAction = type === 'wifi' ? 'openEditModal(' + index + ')' : (type === 'lidar_acc' ? 'openLidarAccuracyEditModal(' + index + ')' : 'openLidarTiltEditModal(' + index + ')');
+    return '<div class="action-menu-wrapper">' +
+      '<button class="icon-btn-dots" onclick="toggleActionMenu(event, \'' + menuId + '\')">&#8942;</button>' +
+      '<div class="dropdown-menu" id="menu_' + menuId + '">' +
+        '<div class="dropdown-item" onclick="' + editAction + '">Edit</div>' +
+        '<div class="dropdown-item" onclick="copyRowData(\'' + type + '\', ' + index + ')">Copy</div>' +
+        '<div class="dropdown-divider"></div>' +
+        '<div class="dropdown-item danger" onclick="deleteFromDropdown(\'' + type + '\', ' + index + ')">' + t('delete_record') + '</div>' +
+      '</div></div>';
+  }
+
+  function renderGenericActionDropdown(moduleKey, sheetRow) {
+    var menuId = 'generic_' + String(moduleKey).replace(/[^a-z0-9_]/gi, '_') + '_' + sheetRow;
+    return '<div class="action-menu-wrapper generic-action-menu">' +
+      '<button type="button" class="icon-btn-dots" aria-label="Row actions" onclick="toggleActionMenu(event, \'' + menuId + '\')">&#8942;</button>' +
+      '<div class="dropdown-menu" id="menu_' + menuId + '">' +
+      '<div class="dropdown-item" onclick="editBaseDepthRow(event,' + sheetRow + ')">Edit</div>' +
+      '<div class="dropdown-divider"></div>' +
+      '<div class="dropdown-item danger" onclick="deleteGenericRow(event,' + sheetRow + ',\'' + String(moduleKey).replace(/'/g, '') + '\')">Delete</div>' +
+      '</div></div>';
+  }
+
+  function toggleActionMenu(event, menuId) {
+    event.stopPropagation();
+    var allMenus = document.querySelectorAll('.dropdown-menu');
+    allMenus.forEach(function(m) { if (m.id !== 'menu_' + menuId) m.classList.remove('show'); });
+    var menu = document.getElementById('menu_' + menuId);
+    if (menu) {
+      var willOpen = !menu.classList.contains('show');
+      menu.classList.toggle('show', willOpen);
+      if (willOpen) {
+        var trigger = event.currentTarget || event.target;
+        var rect = trigger.getBoundingClientRect();
+        menu.style.position = 'fixed';
+        menu.style.right = 'auto';
+        menu.style.left = Math.max(6, rect.right - 145) + 'px';
+        menu.style.top = (rect.bottom + 5) + 'px';
+        menu.style.zIndex = '100000';
+      } else {
+        menu.removeAttribute('style');
+      }
+    }
+  }
+
+  document.addEventListener('click', function() {
+    document.querySelectorAll('.dropdown-menu').forEach(function(m) { m.classList.remove('show'); });
+  });
+
+  function deleteFromDropdown(type, index) {
+    document.querySelectorAll('.dropdown-menu').forEach(function(m) { m.classList.remove('show'); });
+    var moduleKey = type === 'wifi' ? 'Wi-Fi' : (type === 'lidar_acc' ? 'LiDAR Accuracy' : 'LiDAR Tilt');
+    openDeleteConfirm(moduleKey, index, function() {
+      var toast = document.getElementById('copyToast');
+      toast.innerHTML = '<div class="spinner" style="width:16px;height:16px;border-top-color:#ffffff;"></div> <span style="margin-left:4px;">Deleting...</span>';
+      toast.style.display = 'flex';
+      if (type === 'wifi') google.script.run.withSuccessHandler(function(){ toast.style.display='none'; loadCurrentTab(); }).deleteWifiRecord({ rowIndex: index });
+      else google.script.run.withSuccessHandler(function(){ toast.style.display='none'; loadCurrentTab(); }).deleteLidarRecord({ rowIndex: index, lidarType: (type === 'lidar_acc' ? 'accuracy' : 'tilt') });
+    });
+  }
+
+  function copyRowData(type, index) {
+    document.querySelectorAll('.dropdown-menu').forEach(function(m) { m.classList.remove('show'); });
+    var textToCopy = '';
+    if (type === 'wifi') {
+      var row = rawWifiResponse.rows[index] || [];
+      textToCopy = row.map(function(c) { return (c||'').toString().trim(); }).join('\t');
+    } else if (type === 'lidar_acc') {
+      var r1 = rawLidarResponse.accuracy.rows[index] || [], r2 = rawLidarResponse.accuracy.rows[index+1] || [], r3 = rawLidarResponse.accuracy.rows[index+2] || [];
+      textToCopy = r1.join('\t') + '\n' + r2.join('\t') + '\n' + r3.join('\t');
+    } else if (type === 'lidar_tilt') {
+      var row = rawLidarResponse.tilt.rows[index] || [];
+      textToCopy = row.map(function(c) { return (c||'').toString().trim(); }).join('\t');
+    }
+    navigator.clipboard.writeText(textToCopy).then(function() {
+      var toast = document.getElementById('copyToast');
+      toast.innerHTML = '<span style="color:#22c55e; font-weight:800;">✔</span> <span style="margin-left:4px;">' + t('copied') + '</span>';
+      toast.style.display = 'flex';
+      setTimeout(function() { toast.style.display = 'none'; }, 2200);
+    });
+  }
+
+  function showError(error) {
+    setSyncState('Database unavailable', 'error');
+    document.getElementById('tableContainer').innerHTML = '<div class="panel-card"><div style="color:#ef4444; padding:2rem; text-align:center;">Database connection interrupted.</div></div>';
+  }
+
+  function openInputModal() {
+    isEditing = false;
+    activeEditRowIndex = null;
+    activeModuleOriginalRow = null;
+    var deleteBtn = document.getElementById('deleteBtn');
+    var saveBtn = document.getElementById('saveBtn');
+    if (deleteBtn) deleteBtn.style.display = 'none';
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.innerText = 'Save Record'; }
+
+    if (isGenericModule(currentTab) && rawModuleResponse) {
+      openInlineGenericRecord();
+      return;
+    }
+    if (currentTab === 'wifi') renderWifiModal();
+    else if (currentTab === 'lidar') renderLidarModal();
+    else if (isGenericModule(currentTab) && rawModuleResponse) renderGenericModuleModal();
+    else return;
+    document.getElementById('inputModal').style.display = 'flex';
+  }
+
+  var inlineRecordActive = false;
+
+  function getModuleColumnOptions(columnIndex) {
+    var values = {};
+    (rawModuleResponse.rows || []).forEach(function(row) {
+      var value = String(row[columnIndex] || '').trim();
+      if (value) values[value] = true;
+    });
+    var testerColumn = rawModuleResponse.roles && rawModuleResponse.roles.tester >= 0 ? rawModuleResponse.roles.tester : -1;
+    if (columnIndex === testerColumn) {
+      getRegisteredTesterNames().forEach(function(name) { values[name] = true; });
+    }
+    return Object.keys(values).sort();
+  }
+
+  function getRegisteredTesterNames() {
+    return registeredTesterNames.slice();
+  }
+
+  function loadRegisteredTesterNames(onComplete) {
+    google.script.run.withSuccessHandler(function(names) {
+      registeredTesterNames = Array.isArray(names) ? names.filter(Boolean) : [];
+      localStorage.setItem('registered_testers_cache', JSON.stringify(registeredTesterNames));
+      hydrateRegisteredTesterList();
+      if (onComplete) onComplete(registeredTesterNames);
+    }).withFailureHandler(function() {
+      try {
+        registeredTesterNames = JSON.parse(localStorage.getItem('registered_testers_cache') || '[]');
+      } catch (e) { registeredTesterNames = []; }
+      hydrateRegisteredTesterList();
+      if (onComplete) onComplete(registeredTesterNames);
+    }).getRegisteredTesterNames();
+  }
+
+  function hydrateRegisteredTesterList() {
+    var list = document.getElementById('registeredTesterList');
+    if (!list) return;
+    list.innerHTML = getRegisteredTesterNames().map(function(name) { return '<option value="' + escapeHtml(name) + '"></option>'; }).join('');
+  }
+
+  function openInlineGenericRecord() {
+    if (inlineRecordActive) return;
+    var body = document.getElementById('genericModuleTableBody');
+    if (!body) return;
+    inlineRecordActive = true;
+    var headers = rawModuleResponse.headers || [];
+    var robotColumn = rawModuleResponse.roles && rawModuleResponse.roles.robot >= 0 ? rawModuleResponse.roles.robot : 0;
+    var testerColumn = rawModuleResponse.roles && rawModuleResponse.roles.tester >= 0 ? rawModuleResponse.roles.tester : -1;
+    var html = '<tr class="inline-add-row">';
+    headers.forEach(function(header, index) {
+      var options = (index === robotColumn || index === testerColumn) ? getModuleColumnOptions(index) : [];
+      var headDepthImageColumn = rawModuleResponse.key === 'headdepth' && index >= 7 && index <= 9;
+      if (headDepthImageColumn) {
+        html += '<td class="inline-image-add-cell"><select class="inline-record-field head-depth-image-choice" data-column="' + index + '" onchange="toggleHeadDepthImageInput(this)"><option value="">Select…</option><option value="undetected">Undetected</option><option value="import">Import image</option></select><input class="head-depth-image-file" data-image-column="' + index + '" type="file" accept="image/*" onchange="readHeadDepthImage(this)"></td>';
+      } else if (options.length) {
+        var customRobotOption = index === robotColumn ? '<option value="__custom__">Custom robot…</option>' : '';
+        var customHandler = index === robotColumn ? ' onchange="toggleCustomRobotInput(this)"' : '';
+        html += '<td><select class="inline-record-field" data-column="' + index + '"' + customHandler + '><option value="">Select…</option>' + options.map(function(option) { return '<option value="' + escapeHtml(option) + '">' + escapeHtml(option) + '</option>'; }).join('') + customRobotOption + '</select>' + (index === robotColumn ? '<input class="custom-robot-input" type="text" placeholder="Type Robot ID" data-custom-robot-for="' + index + '">' : '') + '</td>';
+      } else {
+        html += '<td><input class="inline-record-field" data-column="' + index + '" type="text" placeholder="' + escapeHtml(getFriendlyModuleHeader(header, index, rawModuleResponse.key)) + '"></td>';
+      }
+    });
+    html += '<td class="module-action-cell"><button type="button" class="inline-save-button" onclick="saveInlineGenericRecord()">Save</button><button type="button" class="inline-cancel-button" onclick="cancelInlineGenericRecord()">Cancel</button></td></tr>';
+    body.insertAdjacentHTML('afterbegin', html);
+    body.parentElement.parentElement.scrollTop = 0;
+    var first = body.querySelector('.inline-record-field');
+    if (first) first.focus();
+  }
+
+  function toggleCustomRobotInput(select) {
+    var input = select.parentElement.querySelector('.custom-robot-input');
+    if (!input) return;
+    input.style.display = select.value === '__custom__' ? 'block' : 'none';
+    if (select.value !== '__custom__') input.value = '';
+    if (select.value === '__custom__') input.focus();
+  }
+
+  function toggleHeadDepthImageInput(select) {
+    var input = select.parentElement.querySelector('.head-depth-image-file');
+    if (!input) return;
+    input.style.display = select.value === 'import' ? 'block' : 'none';
+    if (select.value !== 'import') {
+      input.value = '';
+      delete select.dataset.imageData;
+    }
+  }
+
+  function readHeadDepthImage(input) {
+    var file = input.files && input.files[0];
+    var select = input.parentElement.querySelector('.head-depth-image-choice');
+    if (!file || !select) return;
+    var reader = new FileReader();
+    reader.onload = function(event) {
+      var image = new Image();
+      image.onload = function() {
+        var max = 1200, scale = Math.min(1, max / Math.max(image.width, image.height));
+        var canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(image.width * scale));
+        canvas.height = Math.max(1, Math.round(image.height * scale));
+        canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+        select.dataset.imageData = canvas.toDataURL('image/jpeg', .82);
+        select.options[select.selectedIndex].text = 'Image ready';
+      };
+      image.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function cancelInlineGenericRecord() {
+    var row = document.querySelector('.inline-add-row');
+    if (row) row.remove();
+    inlineRecordActive = false;
+  }
+
+  function saveInlineGenericRecord() {
+    var fields = document.querySelectorAll('.inline-add-row .inline-record-field');
+    var values = [];
+    var robotColumn = rawModuleResponse.roles && rawModuleResponse.roles.robot >= 0 ? rawModuleResponse.roles.robot : 0;
+    fields.forEach(function(field) {
+      var column = Number(field.dataset.column);
+      if (field.classList.contains('head-depth-image-choice')) {
+        values[column] = field.value === 'import' ? (field.dataset.imageData || '') : field.value;
+      } else {
+        values[column] = field.value.trim();
+      }
+    });
+    var customRobot = document.querySelector('.inline-add-row .custom-robot-input');
+    var robotSelect = document.querySelector('.inline-add-row select[data-column="' + robotColumn + '"]');
+    if (robotSelect && robotSelect.value === '__custom__') values[robotColumn] = customRobot ? customRobot.value.trim() : '';
+    if (!values[robotColumn]) { alert('Please select or enter a Robot ID.'); return; }
+    var button = document.querySelector('.inline-save-button');
+    if (button) { button.disabled = true; button.innerText = 'Saving…'; }
+    google.script.run.withSuccessHandler(function(response) {
+      if (!response || !response.success) { handleFail(response && response.error ? response.error : 'Save failed.'); return; }
+      inlineRecordActive = false;
+      localStorage.removeItem('iso_tab_cache_' + rawModuleResponse.key);
+      loadCurrentTab();
+    }).withFailureHandler(handleFail).appendIsoModuleRecord({
+      moduleKey: rawModuleResponse.key,
+      sheetName: rawModuleResponse.sheetName,
+      values: values
+    });
+  }
+
+  function renderGenericModuleModal(row, sheetRow) {
+    var headers = rawModuleResponse.headers || [];
+    var editing = Array.isArray(row);
+    document.getElementById('modalTitle').innerText = (editing ? 'Edit ' : 'Add ') + (rawModuleResponse.title || 'ISO record');
+    var robotColumn = rawModuleResponse.roles && rawModuleResponse.roles.robot >= 0 ? rawModuleResponse.roles.robot : 0;
+    var testerColumn = rawModuleResponse.roles && rawModuleResponse.roles.tester >= 0 ? rawModuleResponse.roles.tester : -1;
+    var robotId = editing ? String(row[robotColumn] || 'Record') : '';
+    document.getElementById('formBody').innerHTML = (editing ? '<div class="modal-record-context"><span>Robot record</span><strong>' + escapeHtml(robotId) + '</strong><small>Only changed fields will be written to Google Sheets.</small></div>' : '') + '<div class="module-edit-grid">' + headers.map(function(header, index) {
+      var label = getFriendlyModuleHeader(header, index, rawModuleResponse.key);
+      var required = index === (rawModuleResponse.roles && rawModuleResponse.roles.robot >= 0 ? rawModuleResponse.roles.robot : 0) ? ' required' : '';
+      var value = editing ? String(row[index] || '') : '';
+      if (editing && isImageCell(value, header, rawModuleResponse.key)) {
+        return '<div class="form-group module-image-field"><label>' + escapeHtml(label) + '</label>' + renderImageCell(value, header, sheetRow, index + 1, rawModuleResponse.sheetName) + '<small>Image evidence is managed from Google Sheets.</small></div>';
+      }
+      var robotList = index === robotColumn ? ' list="registeredRobotList" onfocus="hydrateRegisteredRobotList()"' : '';
+      var testerList = index === testerColumn ? ' list="registeredTesterList" onfocus="hydrateRegisteredTesterList()"' : '';
+      return '<div class="form-group"><label>' + escapeHtml(label) + '</label><input type="text" name="module_field_' + index + '" value="' + escapeHtml(value) + '" placeholder="Enter ' + escapeHtml(label) + '"' + required + robotList + testerList + '></div>';
+    }).join('') + '</div>';
+  }
+
+  function hydrateRegisteredRobotList() {
+    var list = document.getElementById('registeredRobotList');
+    if (!list || list.options.length) return;
+    try {
+      var names = JSON.parse(localStorage.getItem('registered_robot_names') || '[]');
+      list.innerHTML = names.map(function(name) { return '<option value="' + escapeHtml(name) + '"></option>'; }).join('');
+    } catch (e) { /* optional */ }
+  }
+
+  function submitGenericModuleForm() {
+    var values = (rawModuleResponse.headers || []).map(function(_, index) {
+      var field = document.querySelector('[name="module_field_' + index + '"]');
+      return field ? field.value : '';
+    });
+    if (isEditing && activeEditRowIndex && activeModuleOriginalRow) {
+      var changes = [];
+      values.forEach(function(value, index) {
+        var field = document.querySelector('[name="module_field_' + index + '"]');
+        if (!field) return;
+        if (value !== String(activeModuleOriginalRow[index] || '')) changes.push({ column: index + 1, value: value });
+      });
+      if (!changes.length) { closeInputModal(); return; }
+      google.script.run.withSuccessHandler(handleSuccess).withFailureHandler(handleFail).updateIsoModuleCells({
+        sheetName: rawModuleResponse.sheetName, moduleKey: rawModuleResponse.key, row: activeEditRowIndex, changes: changes
+      });
+    } else {
+      google.script.run.withSuccessHandler(handleSuccess).withFailureHandler(handleFail).appendIsoModuleRecord({
+        sheetName: rawModuleResponse.sheetName, moduleKey: rawModuleResponse.key, values: values
+      });
+    }
+  }
+
+  function closeInputModal() {
+    document.getElementById('inputModal').style.display = 'none';
+    isEditing = false;
+    activeEditRowIndex = null;
+    activeModuleOriginalRow = null;
+  }
+
+  function handleSuccess(response) {
+    var saveBtn = document.getElementById('saveBtn');
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.innerText = 'Save Record'; }
+    if (!response || response.success === false) {
+      handleFail(response && response.error ? response.error : 'The record could not be saved.');
+      return;
+    }
+    closeInputModal();
+    var toast = document.getElementById('copyToast');
+    toast.innerHTML = '<span style="color:#34d399;font-weight:800;">✓</span><span>Record synchronized</span>';
+    toast.style.display = 'flex';
+    setTimeout(function() { toast.style.display = 'none'; }, 2200);
+    loadCurrentTab();
+  }
+
+  function handleFail(error) {
+    var saveBtn = document.getElementById('saveBtn');
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.innerText = 'Save Record'; }
+    var toast = document.getElementById('copyToast');
+    toast.innerHTML = '<span style="color:#fca5a5;font-weight:800;">!</span><span>' + escapeHtml('Save error: ' + (error && error.message ? error.message : error)) + '</span>';
+    toast.style.display = 'flex';
+    setTimeout(function() { toast.style.display = 'none'; }, 3600);
+  }
+
+  function confirmDeleteRecord() {
+    if (activeEditRowIndex === null) return;
+    openDeleteConfirm(currentTab, activeEditRowIndex, function() {
+      if (currentTab === 'wifi') {
+        google.script.run.withSuccessHandler(handleSuccess).withFailureHandler(handleFail).deleteWifiRecord({ rowIndex: activeEditRowIndex });
+      } else if (currentTab === 'lidar') {
+        google.script.run.withSuccessHandler(handleSuccess).withFailureHandler(handleFail).deleteLidarRecord({ rowIndex: activeEditRowIndex, lidarType: activeLidarEditType });
+      }
+    });
+  }
+
+  function openSettingsModal() {
+    document.getElementById('setting_matrix_title').value = getMatrixTitle();
+    document.getElementById('setting_dvt1_label').value = getDvt1Label();
+    document.getElementById('setting_dvt2_label').value = getDvt2Label();
+    document.getElementById('setting_testers').value = getRegisteredTesterNames().join('\n');
+    document.getElementById('setting_lang').value = currentLang;
+    hydrateRegisteredTesterList();
+    document.getElementById('settingsModal').style.display = 'flex';
+    loadRegisteredTesterNames(function(names) {
+      document.getElementById('setting_testers').value = names.join('\n');
+    });
+  }
+
+  function closeSettingsModal() { 
+    document.getElementById('settingsModal').style.display = 'none'; 
+  }
+
+  function saveSettings(e) {
+    e.preventDefault();
+    var newTitle = document.getElementById('setting_matrix_title').value.trim();
+    var newDvt1 = document.getElementById('setting_dvt1_label').value.trim();
+    var newDvt2 = document.getElementById('setting_dvt2_label').value.trim();
+    var testerNames = document.getElementById('setting_testers').value.split(/[\n,]+/).map(function(name) { return name.trim(); }).filter(Boolean);
+    var uniqueTesters = [];
+    testerNames.forEach(function(name) { if (uniqueTesters.indexOf(name) === -1) uniqueTesters.push(name); });
+    var newLang = document.getElementById('setting_lang').value;
+    
+    if (newTitle) localStorage.setItem('custom_matrix_title', newTitle);
+    if (newDvt1) localStorage.setItem('custom_dvt1_label', newDvt1);
+    if (newDvt2) localStorage.setItem('custom_dvt2_label', newDvt2);
+    currentLang = newLang;
+    localStorage.setItem('app_lang', newLang);
+    
+    google.script.run.withSuccessHandler(function(result) {
+      registeredTesterNames = result && Array.isArray(result.names) ? result.names : uniqueTesters;
+      localStorage.setItem('registered_testers_cache', JSON.stringify(registeredTesterNames));
+      hydrateRegisteredTesterList();
+      closeSettingsModal();
+      applyLanguage();
+      loadCurrentTab();
+    }).withFailureHandler(function(error) {
+      handleFail(error);
+    }).saveRegisteredTesterNames(uniqueTesters);
+  }
+
+  document.addEventListener('keydown', function(event) {
+    var tag = document.activeElement ? document.activeElement.tagName : '';
+    if (event.key === '/' && tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
+      var search = document.getElementById('tableSearchInput');
+      if (search && search.offsetParent !== null) {
+        event.preventDefault();
+        search.focus();
+        search.select();
+      }
+    }
+    if (event.key === 'Escape') {
+      document.body.classList.remove('mobile-nav-open');
+      document.querySelectorAll('.modal-overlay').forEach(function(modal) { modal.style.display = 'none'; });
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    }
+  });
+
+  var prefetchedTabs = {};
+  function prefetchModuleTab(tabId) {
+    if (!isGenericModule(tabId) || prefetchedTabs[tabId] || tabId === currentTab) return;
+    prefetchedTabs[tabId] = true;
+    var methods = {
+      ratedspeed:'getRatedSpeedData', estop:'getEStopData', turningwidth:'getTurningWidthData',
+      clifflowerspeed:'getCliffLowerSpeedData', traversegap:'getTraverseGapData', narrow:'getNarrowCorridorData',
+      apriltag:'getAprilTagData', accuracylaser:'getModuleData', accuracyapriltag:'getModuleData'
+    };
+    var method = methods[tabId] || 'getModuleData';
+    var runner = google.script.run.withSuccessHandler(function(response) {
+      if (response && response.success) saveTabCache(tabId, { type:'module', data:response });
+    }).withFailureHandler(function() { prefetchedTabs[tabId] = false; });
+    if (method === 'getModuleData') runner.getModuleData(tabId);
+    else runner[method]();
+  }
+
+  window.onload = function() {
+    applyLanguage();
+    loadRegisteredTesterNames();
+    toggleSidebarRail(localStorage.getItem('iso_sidebar_rail') === '1');
+    collapseAllNavGroups();
+    var lastTab = localStorage.getItem('last_iso_tab');
+    switchTab(document.getElementById('nav-' + lastTab) ? lastTab : 'overview');
+    document.querySelectorAll('.nav-item').forEach(function(item) {
+      var tabId = item.id.replace(/^nav-/, '');
+      item.addEventListener('mouseenter', function() { prefetchModuleTab(tabId); }, { passive:true });
+      item.addEventListener('focus', function() { prefetchModuleTab(tabId); }, { passive:true });
+    });
+    var imageObserver = new MutationObserver(function() {
+      document.querySelectorAll('.sheet-image-thumbnail[data-sheet-name]').forEach(function(image) {
+        var src = image.getAttribute('src') || '';
+        if (!/^data:image\//i.test(src) && !image.dataset.proxyAttempted && !src) requestSheetImageProxy(image);
+      });
+    });
+    imageObserver.observe(document.getElementById('tableContainer'), { childList: true, subtree: true });
+  };
+</script>

@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <?!= include('CSS'); ?>
+</head>
+<body>
+
+  <button class="mobile-menu-btn" onclick="document.body.classList.toggle('mobile-nav-open')" aria-label="Toggle navigation">☰</button>
+  <div class="sidebar-scrim" onclick="document.body.classList.remove('mobile-nav-open')"></div>
+
+  <!-- ✨ PROFESSIONAL COLLAPSIBLE LEFT SIDEBAR ✨ -->
+  <aside class="sidebar">
+    <div class="app-brand">
+      <div class="brand-mark"><span>A</span></div>
+      <div class="brand-copy"><div class="brand-chip">Product Performance</div>
+      <h1 id="appMainTitle">AC3110 DVT ISO</h1>
+      <div class="brand-environment"><span></span> Google Sheets live</div></div>
+      <button class="sidebar-rail-toggle" type="button" onclick="toggleSidebarRail()" aria-label="Collapse navigation" title="Collapse navigation">‹</button>
+    </div>
+    <nav class="nav-menu">
+      <button class="nav-item active" id="nav-overview" onclick="switchTab('overview')">
+        <span class="nav-icon">OV</span><span class="nav-label" id="nav_txt_overview">Overview</span>
+      </button>
+      <button class="nav-item" id="nav-general" onclick="switchTab('general')">
+        <span class="nav-icon">IN</span><span class="nav-label" id="nav_txt_general">General Info</span>
+      </button>
+
+      <!-- STATIC ISO FOLDER -->
+      <div class="nav-section-header collapsed" onclick="toggleNavGroup('group-static', this)">
+        <span id="nav_txt_static">STATIC ISO</span>
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      </div>
+      <div class="nav-group collapsed" id="group-static">
+        <button class="nav-item" id="nav-lidar" onclick="switchTab('lidar')"><span class="nav-icon">LD</span><span class="nav-label">LiDAR</span></button>
+        <button class="nav-item" id="nav-headdepth" onclick="switchTab('headdepth')"><span class="nav-icon">HD</span><span class="nav-label">Head depth camera</span></button>
+        <button class="nav-item" id="nav-basedepth" onclick="switchTab('basedepth')"><span class="nav-icon">BD</span><span class="nav-label">Base depth camera</span></button>
+        <button class="nav-item" id="nav-cliff" onclick="switchTab('cliff')"><span class="nav-icon">IR</span><span class="nav-label">IR Cliff</span></button>
+        <button class="nav-item" id="nav-wifi" onclick="switchTab('wifi')"><span class="nav-icon">WF</span><span class="nav-label">Wi-Fi</span></button>
+      </div>
+
+      <!-- DYNAMIC ISO FOLDER -->
+      <div class="nav-section-header collapsed" onclick="toggleNavGroup('group-dynamic', this)">
+        <span id="nav_txt_dynamic">DYNAMIC ISO</span>
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      </div>
+      <div class="nav-group collapsed" id="group-dynamic">
+        <button class="nav-item" id="nav-ratedspeed" onclick="switchTab('ratedspeed')"><span class="nav-icon">RS</span><span class="nav-label">Rated speed</span></button>
+        <button class="nav-item" id="nav-estop" onclick="switchTab('estop')"><span class="nav-icon">ES</span><span class="nav-label">E-Stop</span></button>
+        <button class="nav-item" id="nav-turningwidth" onclick="switchTab('turningwidth')"><span class="nav-icon">TW</span><span class="nav-label">Turning width</span></button>
+        <button class="nav-item" id="nav-clifflowerspeed" onclick="switchTab('clifflowerspeed')"><span class="nav-icon">CL</span><span class="nav-label">Cliff · lower speed</span></button>
+        <button class="nav-item" id="nav-traversegap" onclick="switchTab('traversegap')"><span class="nav-icon">TG</span><span class="nav-label">Traverse gap</span></button>
+        <button class="nav-item" id="nav-narrow" onclick="switchTab('narrow')"><span class="nav-icon">NC</span><span class="nav-label">Narrow corridor</span></button>
+        <button class="nav-item" id="nav-apriltag" onclick="switchTab('apriltag')"><span class="nav-icon">AT</span><span class="nav-label">AprilTag</span></button>
+      </div>
+
+      <!-- ACCURACY & REPEATABILITY -->
+      <div class="nav-section-header collapsed" onclick="toggleNavGroup('group-accuracy', this)">
+        <span id="nav_txt_accuracy">ACCURACY &amp; REPEATABILITY</span>
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      </div>
+      <div class="nav-group collapsed" id="group-accuracy">
+        <button class="nav-item" id="nav-accuracylaser" onclick="switchTab('accuracylaser')"><span class="nav-icon">AL</span><span class="nav-label">Laser detection</span></button>
+        <button class="nav-item" id="nav-accuracyapriltag" onclick="switchTab('accuracyapriltag')"><span class="nav-icon">AA</span><span class="nav-label">AprilTag detection</span></button>
+      </div>
+    </nav>
+    <button class="nav-shortcut" type="button" onclick="focusQuickSearch()" aria-label="Focus quick search"><span>/</span><div><strong>Quick search</strong><small>Press / anywhere</small></div></button>
+  </aside>
+
+  <!-- MAIN CONTENT WRAPPER -->
+  <main class="main-content">
+    
+    <header class="top-header">
+      <div class="workspace-header-left">
+        <div class="header-title-wrap"><span class="header-kicker" id="headerKicker">OVERVIEW</span><h2 id="topHeaderTitle">Overview</h2></div>
+        <nav class="workspace-tabs" aria-label="ISO workspace">
+          <button type="button" class="workspace-tab active" data-workspace="overview" onclick="openWorkspace('overview')">Overview</button>
+          <button type="button" class="workspace-tab" data-workspace="static" onclick="openWorkspace('static')">Static</button>
+          <button type="button" class="workspace-tab" data-workspace="dynamic" onclick="openWorkspace('dynamic')">Dynamic</button>
+          <button type="button" class="workspace-tab" data-workspace="accuracy" onclick="openWorkspace('accuracy')">Accuracy</button>
+        </nav>
+      </div>
+      <div class="top-actions">
+        <div class="header-tools" id="headerTools" style="display:none;"><input type="text" class="search-box" id="tableSearchInput" placeholder="Search..." oninput="filterData(this.value)"><button class="btn-ctrl" id="refreshBtn" onclick="confirmRefresh()"><span id="refreshBtnText">Refresh</span></button><button class="btn-action" id="addRecordBtn" onclick="openInputModal()">+ Add Record</button></div>
+        <button class="btn-ctrl" onclick="toggleLanguage()">🌐 <span id="langToggleText">中文</span></button>
+        <button class="btn-ctrl" onclick="openSettingsModal()">⚙️ <span id="btn_txt_settings">Settings</span></button>
+      </div>
+    </header>
+
+    <div class="content-scroll-area">
+      <div class="filter-controls-bar" id="controlsBar" style="display:none;">
+        <div id="subPillsContainer"></div>
+      </div>
+      
+      <div id="tableContainer">
+        <div class="panel-card">
+          <div style="padding:4rem; text-align:center;"><div class="spinner"></div><br><span style="color:var(--text-muted); font-size:0.85rem; margin-top:10px; display:block;">Loading System Data...</span></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Modals -->
+  <div class="modal-overlay" id="robotDetailModal" onclick="if(event.target===this) closeRobotDetailModal()">
+    <div class="modal-box robot-audit-modal">
+      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:0.75rem; margin-bottom:1rem;">
+        <div>
+          <div style="font-size:0.65rem; font-weight:800; color:var(--text-muted); text-transform:uppercase;" id="auditModalModel">AC3110 DVT NODE</div>
+          <h3 id="auditModalTitle" style="margin:0.15rem 0 0 0; font-size:1.25rem;">Robot Audit</h3>
+        </div>
+        <span class="status-chip info" id="auditModalTask">Active</span>
+      </div>
+      <div class="audit-robot-meta" id="auditRobotMeta"></div>
+      <div id="auditRobotMetaActions" style="display:flex; justify-content:flex-end; margin:-.45rem 0 .85rem;"></div>
+      <div class="audit-robot-context" id="auditRobotContext"></div>
+      <div class="audit-kpi-row">
+        <div style="background:#f8fafc; border:1px solid var(--border); border-radius:6px; padding:0.6rem; text-align:center;">
+          <div style="font-size:1.15rem; font-weight:700; color:var(--text-primary);" id="audit_total_done">0</div>
+          <div style="font-size:0.65rem; font-weight:600; text-transform:uppercase; color:var(--text-muted); margin-top:0.2rem;">ISO Done</div>
+        </div>
+        <div style="background:#f8fafc; border:1px solid var(--border); border-radius:6px; padding:0.6rem; text-align:center;">
+          <div style="font-size:1.15rem; font-weight:700; color:#16a34a;" id="audit_pass_count">0</div>
+          <div style="font-size:0.65rem; font-weight:600; text-transform:uppercase; color:var(--text-muted); margin-top:0.2rem;">Passed</div>
+        </div>
+        <div style="background:#f8fafc; border:1px solid var(--border); border-radius:6px; padding:0.6rem; text-align:center;">
+          <div style="font-size:1.15rem; font-weight:700; color:#dc2626;" id="audit_fail_count">0</div>
+          <div style="font-size:0.65rem; font-weight:600; text-transform:uppercase; color:var(--text-muted); margin-top:0.2rem;">Failed</div>
+        </div>
+        <div style="background:#f8fafc; border:1px solid var(--border); border-radius:6px; padding:0.6rem; text-align:center;">
+          <div style="font-size:1.15rem; font-weight:700; color:#d97706;" id="audit_warn_count">0</div>
+          <div style="font-size:0.65rem; font-weight:600; text-transform:uppercase; color:var(--text-muted); margin-top:0.2rem;">Warnings</div>
+        </div>
+      </div>
+      <h4 style="font-size:0.85rem; font-weight:700; margin:0 0 0.75rem 0; color:var(--text-secondary);">Static ISO → Dynamic ISO checklist</h4>
+      <div id="auditSensorBreakdown"></div>
+      <div style="display:flex; justify-content:flex-end; margin-top:1.5rem;">
+        <button type="button" class="btn-ctrl" onclick="closeRobotDetailModal()">Close Audit</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="settingsModal">
+    <div class="modal-box">
+      <h3>⚙️ System Settings</h3>
+      <form onsubmit="saveSettings(event)">
+        <div class="form-group">
+          <label>Display Language / 系統語言</label>
+          <select id="setting_lang">
+            <option value="en">English (US)</option>
+            <option value="zh">繁體中文 (Traditional Chinese)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Custom Matrix Section Title</label>
+          <input type="text" id="setting_matrix_title" placeholder="Master Test Execution Matrix">
+        </div>
+        <div style="display:flex; gap:1rem;">
+          <div class="form-group" style="flex:1;">
+            <label>DVT1 Filter Label</label>
+            <input type="text" id="setting_dvt1_label" placeholder="AC3110-DVT1">
+          </div>
+          <div class="form-group" style="flex:1;">
+            <label>DVT2 Filter Label</label>
+            <input type="text" id="setting_dvt2_label" placeholder="AC3110-DVT2">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Registered Tester Names</label>
+          <textarea id="setting_testers" rows="3" placeholder="One tester per line"></textarea>
+          <small style="color:var(--text-muted); font-size:.62rem;">These names will appear in tester dropdowns across all ISO modules.</small>
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:0.6rem; margin-top:0.5rem;">
+          <button type="button" class="btn-ctrl" onclick="closeSettingsModal()">Cancel</button>
+          <button type="submit" class="btn-action">Save Settings</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-overlay image-preview-overlay" id="sheetImageModal" onclick="if(event.target===this) closeSheetImagePreview()">
+    <div class="image-preview-box">
+      <div class="image-preview-header">
+        <div><span>GOOGLE SHEETS IMAGE</span><h3 id="sheetImagePreviewTitle">Head depth image</h3></div>
+        <button type="button" class="image-preview-close" onclick="closeSheetImagePreview()" aria-label="Close image preview">×</button>
+      </div>
+      <div class="image-preview-stage"><img id="sheetImagePreview" alt="Head depth camera evidence"></div>
+      <div class="image-preview-footer"><span>Image loaded from the linked spreadsheet cell</span><a id="sheetImageOpenLink" href="#" target="_blank" rel="noopener noreferrer">Open original ↗</a></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="inputModal">
+    <div class="modal-box">
+      <h3 id="modalTitle">Add Record</h3>
+      <form id="recordForm" onsubmit="submitForm(event)">
+        <div id="formBody"></div> 
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:1.5rem;">
+          <button type="button" class="btn-ctrl" style="color:var(--danger); border-color:var(--danger-border); display:none;" id="deleteBtn" onclick="confirmDeleteRecord()">🗑️ Delete</button>
+          <div style="display:flex; gap:0.6rem; margin-left:auto;">
+            <button type="button" class="btn-ctrl" onclick="closeInputModal()">Cancel</button>
+            <button type="submit" class="btn-action" id="saveBtn">Save Changes</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="addRobotModal">
+    <div class="modal-box">
+      <h3>Add Robot to ISO Matrix</h3>
+      <p style="margin:-.35rem 0 1rem; color:var(--text-muted); font-size:.68rem;">The new robot will be added as a new column in the Overview sheet.</p>
+      <form onsubmit="submitAddRobot(event)">
+        <div class="form-group"><label>Robot name</label><input id="newRobotName" required placeholder="AC3110-DVT3-1"></div>
+        <div class="form-group"><label>SW release</label><input id="newRobotSw" placeholder="2026-27-02-2"></div>
+        <div class="form-group"><label>Temperature</label><input id="newRobotTemp" placeholder="25.5°C"></div>
+        <div class="form-group"><label>Humidity</label><input id="newRobotHumidity" placeholder="55%"></div>
+        <div style="display:flex; justify-content:flex-end; gap:.6rem; margin-top:1.2rem;">
+          <button type="button" class="btn-ctrl" onclick="closeAddRobotModal()">Cancel</button>
+          <button type="submit" class="btn-action" id="addRobotSaveBtn">Add Robot</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="toast" id="copyToast"></div>
+  <datalist id="registeredRobotList"></datalist>
+  <datalist id="registeredTesterList"></datalist>
+
+  <?!= include('App_JS'); ?>
+  <?!= include('HeadDepth_JS'); ?>
+  <?!= include('Overview_JS'); ?>
+  <?!= include('WiFi_JS'); ?>
+  <?!= include('Lidar_JS'); ?>
+
+</body>
+</html>

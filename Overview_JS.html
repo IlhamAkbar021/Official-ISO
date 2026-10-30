@@ -1,0 +1,866 @@
+<datalist id="overviewQuickPicks">
+  <option value="Pass"></option>
+  <option value="Fail"></option>
+  <option value="Done"></option>
+  <option value="Pass Q1"></option>
+  <option value="Pass Q2"></option>
+  <option value="Waiting"></option>
+</datalist>
+
+<script>
+  var rawOverviewResponse = null;
+  var rawHeadDepthResponse = null;
+  var isMatrixEditMode = false;
+  var dirtyMatrixCells = {};
+  var activeDvtFilter = 'all'; 
+  var activeAuditRobotName = '';
+  var isAuditMetaEditing = false;
+  document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') {
+      var modal = document.getElementById('robotDetailModal');
+      if (modal && modal.style.display !== 'none') closeRobotDetailModal();
+    }
+  });
+
+  function setDvtFilter(filterKey) {
+    activeDvtFilter = filterKey;
+    if (rawOverviewResponse) renderOverview(rawOverviewResponse, rawHeadDepthResponse);
+  }
+
+  function openAddRobotModal() {
+    ['newRobotName', 'newRobotSw', 'newRobotTemp', 'newRobotHumidity'].forEach(function(id) {
+      var field = document.getElementById(id);
+      if (field) field.value = '';
+    });
+    document.getElementById('addRobotModal').style.display = 'flex';
+    setTimeout(function() { document.getElementById('newRobotName').focus(); }, 0);
+  }
+
+  function closeAddRobotModal() {
+    document.getElementById('addRobotModal').style.display = 'none';
+  }
+
+  function submitAddRobot(event) {
+    event.preventDefault();
+    var saveBtn = document.getElementById('addRobotSaveBtn');
+    var name = document.getElementById('newRobotName').value.trim();
+    var sw = document.getElementById('newRobotSw').value.trim();
+    var temp = document.getElementById('newRobotTemp').value.trim();
+    var humidity = document.getElementById('newRobotHumidity').value.trim();
+    if (!/dvt\s*[-_]?\s*\d+/i.test(name)) {
+      alert('Robot name must include a DVT cohort, for example AC3110-DVT3-1.');
+      return;
+    }
+    saveBtn.disabled = true;
+    saveBtn.innerText = 'Adding...';
+    google.script.run
+      .withSuccessHandler(function(res) {
+        saveBtn.disabled = false;
+        saveBtn.innerText = 'Add Robot';
+        if (!res || !res.success) { alert('Add Robot Error: ' + (res && res.error ? res.error : 'Unknown error')); return; }
+        closeAddRobotModal();
+        loadCurrentTab();
+      })
+      .withFailureHandler(function(err) {
+        saveBtn.disabled = false;
+        saveBtn.innerText = 'Add Robot';
+        alert('Network Error adding robot: ' + (err && err.message ? err.message : 'Unknown error'));
+      })
+      .addOverviewRobot({ name: name, sw: sw, temp: temp, humidity: humidity });
+  }
+
+  function getAvailableDvtCohorts(robots) {
+    var found = {};
+    (robots || []).forEach(function(robot) {
+      var match = String(robot.name || '').toLowerCase().match(/dvt\s*[-_]?\s*(\d+)/);
+      if (match) found['dvt' + match[1]] = Number(match[1]);
+    });
+    return Object.keys(found).sort(function(a, b) { return found[a] - found[b]; });
+  }
+
+  function getDvtCohortLabel(cohortKey) {
+    var number = String(cohortKey).replace(/^dvt/i, '');
+    if (cohortKey === 'dvt1') return getDvt1Label();
+    if (cohortKey === 'dvt2') return getDvt2Label();
+    return 'AC3110-DVT' + number;
+  }
+
+  function updateRegisteredRobotList(robots) {
+    var names = (robots || []).map(function(robot) { return String(robot.name || '').trim(); }).filter(Boolean);
+    try { localStorage.setItem('registered_robot_names', JSON.stringify(names)); } catch (e) { /* optional */ }
+    var list = document.getElementById('registeredRobotList');
+    if (list) list.innerHTML = names.map(function(name) { return '<option value="' + escapeHtml(name) + '"></option>'; }).join('');
+  }
+
+  function getOverviewResultState(value) {
+    var text = String(value || '').trim().toLowerCase();
+    if (!text || text === '-' || text === 'n/a' || text === 'na') return 'not-performed';
+    if (/fail|\bng\b|not acceptable|reject|bad/.test(text)) return 'fail';
+    if (/pass|done|\bok\b|acceptable|normal|\bpp\b/.test(text)) return 'pass';
+    if (/wait|pending|progress|warn|partial|tilt|readjust|retest/.test(text)) return 'attention';
+    if (!isNaN(parseFloat(text)) && isFinite(text)) return 'data';
+    return 'attention';
+  }
+
+  // Keep the robot checklist readable while preserving the original result in a tooltip.
+  function getChecklistStatusLabel(value, state) {
+    var text = String(value || '').trim().toLowerCase();
+    if (state === 'not-performed') return 'In-progress';
+    if (state === 'fail') return 'Failed';
+    if (state === 'attention') return 'Warning';
+    if (state === 'data') return 'ISO Done';
+    if (text.indexOf('done') !== -1) return 'ISO Done';
+    if (text.indexOf('pass') !== -1 || text === 'ok' || text === 'pp') return 'Passed';
+    return 'ISO Done';
+  }
+
+  function getCohortRowStats(testRow, robots) {
+    var stats = { pass: 0, fail: 0, attention: 0, data: 0, notPerformed: 0 };
+    robots.forEach(function(robot) {
+      var state = getOverviewResultState(testRow.results[robot.name]);
+      if (state === 'not-performed') stats.notPerformed++;
+      else if (state === 'data') stats.data++;
+      else stats[state]++;
+    });
+    stats.statusTotal = stats.pass + stats.fail + stats.attention;
+    stats.performed = stats.statusTotal + stats.data;
+    stats.passRate = stats.statusTotal ? (stats.pass / stats.statusTotal * 100) : null;
+    stats.failRate = stats.statusTotal ? (stats.fail / stats.statusTotal * 100) : null;
+    return stats;
+  }
+
+  function getOverviewTestGroup(testRow) {
+    var text = ((testRow.item || '') + ' ' + (testRow.purpose || '')).toLowerCase();
+    var isAccuracy = /accuracy|repeatability|repeatabilty|a\s*&\s*r/.test(text);
+    if (isAccuracy && /april\s*tag|apriltag|tag detection/.test(text)) return { key: 'ar-apriltag', label: 'Accuracy & Repeatability · AprilTag Detection', phase: 'Accuracy & Repeatability', order: 31 };
+    if (isAccuracy && /laser|lidar/.test(text)) return { key: 'ar-laser', label: 'Accuracy & Repeatability · Laser Detection', phase: 'Accuracy & Repeatability', order: 30 };
+    if (/e[-\s]?stop|emergency stop|stop characteristic|18646.*clause 6/.test(text)) return { key: 'dynamic-estop', label: 'Dynamic ISO · E-Stop', phase: 'Dynamic ISO', order: 20 };
+    if (/turning width|turn width/.test(text)) return { key: 'dynamic-turning', label: 'Dynamic ISO · Turning Width', phase: 'Dynamic ISO', order: 22 };
+    if (/cliff/.test(text) && /low|lower|speed/.test(text)) return { key: 'dynamic-cliff-low', label: 'Dynamic ISO · Cliff at Lower Speed', phase: 'Dynamic ISO', order: 23 };
+    if (/rated speed|deviation/.test(text)) return { key: 'dynamic-speed', label: 'Dynamic ISO · Rated Speed', phase: 'Dynamic ISO', order: 21 };
+    if (/traverse|gap/.test(text)) return { key: 'dynamic-gap', label: 'Dynamic ISO · Traverse Gap', phase: 'Dynamic ISO', order: 24 };
+    if (/narrow|corridor/.test(text)) return { key: 'dynamic-narrow', label: 'Dynamic ISO · Narrow Corridor', phase: 'Dynamic ISO', order: 25 };
+    if (/april\s*tag|apriltag/.test(text)) return { key: 'dynamic-apriltag', label: 'Dynamic ISO · AprilTag', phase: 'Dynamic ISO', order: 26 };
+    if (/head.*depth|rgbd/.test(text)) return { key: 'static-head', label: 'Static ISO · Head Depth Camera', phase: 'Static ISO', order: 11 };
+    if (/base.*depth|urdf/.test(text)) return { key: 'static-base', label: 'Static ISO · Base Depth Camera', phase: 'Static ISO', order: 12 };
+    if (/cliff|^ir\b/.test(text)) return { key: 'static-cliff', label: 'Static ISO · IR Cliff', phase: 'Static ISO', order: 13 };
+    if (/wi[-\s]?fi/.test(text)) return { key: 'static-wifi', label: 'Static ISO · Wi-Fi', phase: 'Static ISO', order: 14 };
+    if (/lidar|laser/.test(text)) return { key: 'static-lidar', label: 'Static ISO · LiDAR', phase: 'Static ISO', order: 10 };
+    // Accuracy & Repeatability items without a more specific marker belong to
+    // the Laser Detection group instead of creating a separate "Other" section.
+    if (isAccuracy) return { key: 'ar-laser', label: 'Accuracy & Repeatability · Laser Detection', phase: 'Accuracy & Repeatability', order: 30 };
+    return { key: 'other', label: 'Additional Validation', phase: 'Other', order: 99 };
+  }
+
+  function getOrderedOverviewTests(tests) {
+    return tests.map(function(test, index) {
+      return { test: test, group: getOverviewTestGroup(test), originalIndex: index };
+    }).sort(function(a, b) {
+      return a.group.order - b.group.order || a.originalIndex - b.originalIndex;
+    });
+  }
+
+  function renderOverviewBadge(text) {
+    if (!text || text === '') return '<span style="color:var(--border);">-</span>';
+    
+    var lower = text.toLowerCase();
+    var isNum = !isNaN(parseFloat(text)) && isFinite(text);
+    if (isNum) return '<span style="font-weight:700; color:var(--text-primary); font-size:0.75rem;">' + text + '</span>';
+
+    var displayStatus = text;
+    var chipClass = 'neutral';
+    var tooltipRequired = false;
+
+    if (lower === 'pass' || lower === 'done' || lower === 'pass q1' || lower === 'pass q2' || lower === 'pp') {
+      chipClass = (lower === 'pp') ? 'info' : 'pass';
+    } else if (lower === 'fail') {
+      chipClass = 'fail';
+    } else if (lower.indexOf('pass') !== -1 && lower.indexOf('fail') !== -1) {
+      displayStatus = 'Partial'; chipClass = 'warn'; tooltipRequired = true;
+    } else if (lower.indexOf('fail') !== -1) {
+      displayStatus = 'Fail'; chipClass = 'fail'; tooltipRequired = true;
+    } else if (lower.indexOf('pass') !== -1) {
+      displayStatus = 'Pass'; chipClass = 'pass';
+      if (text.length > 6) tooltipRequired = true;
+    } else if (lower.indexOf('waiting') !== -1 || lower.indexOf('tilt') !== -1 || lower.indexOf('readjust') !== -1) {
+      displayStatus = 'Warn / Pen.'; chipClass = 'warn'; tooltipRequired = true;
+    } else {
+      if (text.length > 9) { tooltipRequired = true; displayStatus = text.substring(0, 8) + '..'; }
+    }
+
+    if (tooltipRequired) {
+      return '<div class="info-tooltip badge-tooltip" style="margin:0;">' +
+               '<span class="status-chip ' + chipClass + '" style="cursor:help;">' + displayStatus + ' *</span>' +
+               '<span class="tooltip-text" style="min-width:180px; text-align:center;">' + text + '</span>' +
+             '</div>';
+    }
+    return '<span class="status-chip ' + chipClass + '">' + displayStatus + '</span>';
+  }
+
+  function renderOverview(response, headDepthResponse) {
+    rawOverviewResponse = response;
+    if (headDepthResponse) rawHeadDepthResponse = headDepthResponse;
+    var container = document.getElementById('tableContainer');
+    if (!response || !response.success) {
+      container.innerHTML = '<div class="panel-card"><div style="color:#ef4444; padding:2rem; text-align:center;">' + (response ? response.error : 'Telemetry retrieval failed') + '</div></div>';
+      return;
+    }
+    updateRegisteredRobotList(response.robots);
+
+    var availableDvtCohorts = getAvailableDvtCohorts(response.robots);
+    if (activeDvtFilter !== 'all' && availableDvtCohorts.indexOf(activeDvtFilter) === -1) activeDvtFilter = 'all';
+    var filteredRobots = response.robots.filter(function(r) {
+      if (activeDvtFilter === 'all') return true;
+      var cohortMatch = String(r.name || '').toLowerCase().match(/dvt\s*[-_]?\s*(\d+)/);
+      return cohortMatch && ('dvt' + cohortMatch[1]) === activeDvtFilter;
+    });
+
+    var totalUnits = filteredRobots.length;
+    var totalSuites = response.tests.length;
+    var cohortPass = 0, cohortStatus = 0, warnCount = 0;
+    var selectedCohortLabel = activeDvtFilter === 'all' ? 'All DVT' : getDvtCohortLabel(activeDvtFilter);
+
+    response.tests.forEach(function(tRow) {
+      var rowStats = getCohortRowStats(tRow, filteredRobots);
+      cohortPass += rowStats.pass;
+      cohortStatus += rowStats.statusTotal;
+      warnCount += rowStats.fail + rowStats.attention;
+    });
+
+    var avgPass = cohortStatus > 0 ? (cohortPass / cohortStatus * 100).toFixed(1) : '—';
+
+    // Start 2-Column Split Layout
+    var html = '<div class="overview-layout">';
+
+    // LEFT COLUMN (Main Matrix & KPIs)
+    html += '<div class="overview-main">';
+    
+    // KPIs
+    html += '<div class="telemetry-strip">' +
+      '<div class="telemetry-card"><div class="telemetry-label">' + t('units_tested') + '</div><div class="telemetry-value">' + totalUnits + '</div></div>' +
+      '<div class="telemetry-card"><div class="telemetry-label">' + t('pass_rate_kpi') + '</div><div class="telemetry-value" style="color:#15803d;">' + avgPass + (avgPass === '—' ? '' : '%') + '</div><div class="telemetry-sub">Calculated from ' + escapeHtml(selectedCohortLabel) + '</div></div>' +
+      '<div class="telemetry-card"><div class="telemetry-label">' + t('suite_runs') + '</div><div class="telemetry-value">' + totalSuites + '</div></div>' +
+      '<div class="telemetry-card"><div class="telemetry-label">' + t('warn_count') + '</div><div class="telemetry-value" style="color:#b45309;">' + warnCount + '</div></div>' +
+    '</div>';
+
+    // Matrix
+    var matrixTitle = getMatrixTitle();
+    var dirtyTotal = Object.keys(dirtyMatrixCells).length;
+    var fA = activeDvtFilter === 'all' ? 'active' : '';
+    var cohortButtons = '<button class="dvt-cohort-btn ' + fA + '" onclick="setDvtFilter(\'all\')">All DVT</button>';
+    availableDvtCohorts.forEach(function(cohortKey) {
+      cohortButtons += '<button class="dvt-cohort-btn ' + (activeDvtFilter === cohortKey ? 'active' : '') + '" onclick="setDvtFilter(\'' + cohortKey + '\')">' + escapeHtml(getDvtCohortLabel(cohortKey)) + '</button>';
+    });
+
+    var matrixColumns = '<colgroup><col class="matrix-test-col"><col class="matrix-note-col"><col class="matrix-rate-col"><col class="matrix-rate-col">' +
+      '<col class="matrix-stat-col"><col class="matrix-stat-col"><col class="matrix-stat-col"><col class="matrix-stat-col"><col class="matrix-stat-col"><col class="matrix-stat-col">';
+    filteredRobots.forEach(function() { matrixColumns += '<col class="matrix-robot-col">'; });
+    matrixColumns += '</colgroup>';
+
+    html += '<div class="panel-card" style="margin-bottom:0;"><div class="panel-header">' +
+      '<div style="display:flex; align-items:center; gap:1rem; flex-wrap:wrap;">' +
+        '<h2 id="matrixTitleText">' + matrixTitle + '</h2>' +
+        '<div class="dvt-cohort-selector">' +
+          cohortButtons +
+        '</div>' +
+      '</div>' +
+      '<div style="display:flex; align-items:center; gap:0.5rem;">' +
+        '<button class="btn-ctrl" onclick="openAddRobotModal()">+ Add Robot</button>' +
+        (isMatrixEditMode
+          ? '<button class="btn-action success" onclick="saveMatrixInlineEdits()">💾 Save (' + dirtyTotal + ')</button>' +
+            '<button class="btn-ctrl" onclick="cancelMatrixInlineEdit()">Cancel</button>'
+          : '<button class="btn-ctrl primary" onclick="toggleMatrixInlineEdit()">Edit Matrix</button>'
+        ) +
+      '</div>' +
+    '</div><div class="table-scroller matrix-scroller"><table class="overview-matrix-table">' + matrixColumns + '<thead><tr>' +
+      '<th style="min-width:180px;">' + t('test_category') + '</th>' +
+      '<th class="col-compact-th">' + t('notes') + '</th>' +
+      '<th class="col-compact-th">' + t('pass_rate') + '</th>' +
+      '<th class="col-compact-th">' + t('fail_rate') + '</th>' +
+      '<th class="col-compact-th">MAX</th>' +
+      '<th class="col-compact-th">MIN</th>' +
+      '<th class="col-compact-th">AVG</th>' +
+      '<th class="col-compact-th">STD</th>' +
+      '<th class="col-compact-th">+3STD</th>' +
+      '<th class="col-compact-th">-3STD</th>';
+      
+    filteredRobots.forEach(function(r) { 
+      // Safely strip hidden line breaks for table headers
+      var shortName = r.name.toUpperCase().replace('AC3110', '').replace(/[\r\n]+/g, ' ').trim();
+      html += '<th style="text-align:center; padding: 0.5rem 0.35rem;">' + shortName + '</th>'; 
+    });
+    
+    html += '</tr></thead><tbody>';
+
+    if (response.tests.length === 0) {
+      html += '<tr><td colspan="25" style="padding:2rem; text-align:center; color:var(--text-muted);">No records detected in sheet.</td></tr>';
+    } else {
+      var orderedTests = getOrderedOverviewTests(response.tests);
+      var lastPhase = '';
+      var matrixColspan = 10 + filteredRobots.length;
+      orderedTests.forEach(function(entry) {
+        var tRow = entry.test;
+        var rowStats = getCohortRowStats(tRow, filteredRobots);
+        if (entry.group.phase !== lastPhase) {
+          html += '<tr class="matrix-phase-row"><td colspan="' + matrixColspan + '"><span>' + escapeHtml(entry.group.phase) + '</span></td></tr>';
+          lastPhase = entry.group.phase;
+        }
+        var purposeIcon = '';
+        if (tRow.purpose && tRow.purpose.trim() !== '' && tRow.purpose.toLowerCase() !== tRow.item.toLowerCase()) {
+          purposeIcon = '<div class="info-tooltip">' +
+            '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>' +
+            '<span class="tooltip-text">' + tRow.purpose + '</span></div>';
+        }
+
+        var notesHtml = '<span style="color:var(--border);">-</span>';
+        var hasNotes = tRow.summary || tRow.sugSW || tRow.sugHW || tRow.actionPP || tRow.note;
+        if (hasNotes) {
+          var combined = '';
+          if(tRow.summary) combined += '<div style="margin-bottom:3px;"><b>Summary:</b> ' + tRow.summary + '</div>';
+          if(tRow.sugSW) combined += '<div style="margin-bottom:3px;"><b>SW Sugg:</b> ' + tRow.sugSW + '</div>';
+          if(tRow.sugHW) combined += '<div style="margin-bottom:3px;"><b>HW Sugg:</b> ' + tRow.sugHW + '</div>';
+          if(tRow.actionPP) combined += '<div style="margin-bottom:3px;"><b>Action:</b> ' + tRow.actionPP + '</div>';
+          if(tRow.note) combined += '<div><b>Note:</b> ' + tRow.note + '</div>';
+          notesHtml = '<div class="info-tooltip" style="margin:0; color:#3b82f6;">' +
+            '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>' +
+            '<span class="tooltip-text" style="width:260px;">' + combined + '</span></div>';
+        }
+
+        function cVal(val) { return val ? val : '<span style="color:var(--border);">-</span>'; }
+
+        html += '<tr>' +
+          '<td class="matrix-test-cell"><div class="matrix-test-name"><span title="' + escapeHtml(tRow.item) + '">' + escapeHtml(tRow.item) + '</span>' + purposeIcon + '</div></td>' +
+          '<td class="col-compact-td">' + notesHtml + '</td>' +
+          '<td class="col-compact-td" style="font-weight:700; color:#15803d;">' + (rowStats.passRate === null ? '<span style="color:var(--border);">-</span>' : rowStats.passRate.toFixed(1) + '%') + '</td>' +
+          '<td class="col-compact-td" style="font-weight:700; color:#b91c1c;">' + (rowStats.failRate === null ? '<span style="color:var(--border);">-</span>' : rowStats.failRate.toFixed(1) + '%') + '</td>' +
+          '<td class="col-compact-td">' + cVal(tRow.max) + '</td>' +
+          '<td class="col-compact-td">' + cVal(tRow.min) + '</td>' +
+          '<td class="col-compact-td">' + cVal(tRow.avg) + '</td>' +
+          '<td class="col-compact-td">' + cVal(tRow.std) + '</td>' +
+          '<td class="col-compact-td">' + cVal(tRow.avgPlus) + '</td>' +
+          '<td class="col-compact-td">' + cVal(tRow.avgMinus) + '</td>';
+        
+        filteredRobots.forEach(function(r) {
+          var originalVal = tRow.results[r.name] || '';
+          var cellKey = tRow.sheetRow + '_' + r.col;
+          var currentVal = (dirtyMatrixCells[cellKey] !== undefined) ? dirtyMatrixCells[cellKey].val : originalVal;
+          var isDirty = (dirtyMatrixCells[cellKey] !== undefined);
+
+          if (isMatrixEditMode) {
+            var statusValue = String(currentVal || '').trim();
+            var isStatusCell = !statusValue || /pass|fail|done|warning|warn|progress|pending|wait|retest|ng|ok/i.test(statusValue);
+            if (isStatusCell) {
+              var normalizedStatus = !statusValue ? 'In-progress' : (/fail|ng/i.test(statusValue) ? 'Fail' : (/warn/i.test(statusValue) ? 'Warning' : (/progress|pending|wait|retest/i.test(statusValue) ? 'In-progress' : (/done/i.test(statusValue) ? 'Done' : (/pass|ok/i.test(statusValue) ? 'Pass' : 'Custom')))));
+              var customDescription = normalizedStatus === 'Custom' ? statusValue : '';
+              var statusClass = normalizedStatus.toLowerCase().replace(/[^a-z]+/g, '-');
+              html += '<td style="text-align:center; padding:2px;">' +
+                '<select class="cell-inline-input matrix-status-select status-' + statusClass + ' ' + (isDirty ? 'dirty' : '') + '" data-row="' + tRow.sheetRow + '" data-col="' + r.col + '" data-orig="' + escapeHtml(originalVal) + '" data-custom-description="' + escapeHtml(customDescription) + '" title="Select ISO test status" onchange="askCustomMatrixStatus(this); markCellDirty(this); updateMatrixStatusHint(this)">' +
+                '<option value="">—</option><option value="Pass"' + (normalizedStatus === 'Pass' ? ' selected' : '') + '>Pass</option><option value="Fail"' + (normalizedStatus === 'Fail' ? ' selected' : '') + '>Fail</option><option value="In-progress"' + (normalizedStatus === 'In-progress' ? ' selected' : '') + '>In-progress</option><option value="Warning"' + (normalizedStatus === 'Warning' ? ' selected' : '') + '>Warning</option><option value="Done"' + (normalizedStatus === 'Done' ? ' selected' : '') + '>Done</option><option value="Custom" onchange="askCustomMatrixStatus(this)">Custom</option>' +
+                '</select></td>';
+            } else {
+              html += '<td style="text-align:center; padding: 2px;">' +
+                '<input type="text" class="cell-inline-input ' + (isDirty ? 'dirty' : '') + '" ' +
+                       'data-row="' + tRow.sheetRow + '" data-col="' + r.col + '" data-orig="' + (originalVal.replace(/"/g, '&quot;')) + '" ' +
+                       'value="' + (currentVal.replace(/"/g, '&quot;')) + '" ' +
+                       'onchange="markCellDirty(this)" oninput="markCellDirty(this)">' +
+              '</td>';
+            }
+          } else {
+            html += '<td style="text-align:center; padding: 0.45rem 0.2rem;">' + renderOverviewBadge(originalVal) + '</td>';
+          }
+        });
+        
+        html += '</tr>';
+      });
+    }
+
+    html += '</tbody></table></div><div class="matrix-bottom-scroll" aria-label="Scroll execution matrix horizontally"><div></div></div></div>';
+    html += '</div>'; // End Left Column
+
+    // RIGHT COLUMN (Sidebar Fleet Panel)
+    html += '<div class="overview-sidebar">' +
+      '<div class="fleet-panel-header"><div><h3>ISO Test Status</h3><p>Completion progress by robot</p></div></div>' +
+      '<div class="fleet-panel-list">';
+    
+    filteredRobots.forEach(function(r) {
+      // Safely strip hidden line breaks for card headers
+      var botName = r.name.toUpperCase().replace('AC3110', '').replace(/[\r\n]+/g, ' ').trim();
+      var sw = (r.sw && r.sw !== 'N/A') ? r.sw : 'Not recorded';
+      var temp = (r.temp && r.temp !== 'N/A') ? r.temp + '°C' : 'Not recorded';
+      var humidity = (r.hum && r.hum !== 'N/A') ? r.hum + '%' : 'Not recorded';
+      var robotSummary = { pass: 0, fail: 0, attention: 0, data: 0, remaining: 0 };
+      response.tests.forEach(function(test) {
+        var state = getOverviewResultState(test.results[r.name]);
+        if (state === 'pass') robotSummary.pass++;
+        else if (state === 'fail') robotSummary.fail++;
+        else if (state === 'attention') robotSummary.attention++;
+        else if (state === 'data') robotSummary.data++;
+        else if (state === 'not-performed') robotSummary.remaining++;
+      });
+      var readinessDone = robotSummary.remaining === 0;
+      var readinessLabel = readinessDone ? 'ISO Test Done' : 'ISO Test In Progress';
+      var readinessClass = readinessDone ? 'pass' : 'info';
+      
+      // ✨ FIX: Safely encode the robot name to prevent invalid token errors on click ✨
+      var safeBotId = encodeURIComponent(r.name).replace(/'/g, "%27");
+
+      html += '<div class="fleet-side-card" onclick="openRobotDetailModal(decodeURIComponent(\'' + safeBotId + '\'))">' +
+        '<div class="fsc-top">' +
+          '<span class="fsc-id">' + botName + '</span>' +
+          '<span class="status-chip ' + readinessClass + '" style="font-size:0.6rem;">' + readinessLabel + '</span>' +
+        '</div>' +
+        '<div class="fsc-row"><span class="fsc-lbl">' + t('sw_release') + '</span><span class="fsc-val">' + sw + '</span></div>' +
+        '<div class="fsc-row"><span class="fsc-lbl">Temperature</span><span class="fsc-val">' + temp + '</span></div>' +
+        '<div class="fsc-row"><span class="fsc-lbl">Humidity</span><span class="fsc-val">' + humidity + '</span></div>' +
+        '<div class="fleet-readiness-bar"><span class="pass" style="width:' + (robotSummary.pass / Math.max(1, response.tests.length) * 100) + '%"></span><span class="fail" style="width:' + (robotSummary.fail / Math.max(1, response.tests.length) * 100) + '%"></span><span class="attention" style="width:' + (robotSummary.attention / Math.max(1, response.tests.length) * 100) + '%"></span><span class="data" style="width:' + (robotSummary.data / Math.max(1, response.tests.length) * 100) + '%"></span></div>' +
+        '<div class="fleet-readiness-counts"><span>' + robotSummary.pass + ' passed</span><span>' + (robotSummary.data ? robotSummary.data + ' measured · ' : '') + robotSummary.remaining + ' remaining</span></div>' +
+      '</div>';
+    });
+    
+    html += '</div></div></div>'; // End Right Column & Layout Wrapper
+    container.innerHTML = html;
+    var matrixTooltipState = window.__matrixTooltipState || (window.__matrixTooltipState = { trigger: null, hide: null, guardAttached: false });
+    container.querySelectorAll('.overview-matrix-table .info-tooltip').forEach(function(trigger) {
+      var tooltip = trigger.querySelector('.tooltip-text');
+      if (!tooltip) return;
+      var isCategoryTooltip = !!trigger.closest('.matrix-test-cell');
+      var tooltipOriginalParent = tooltip.parentNode;
+      var tooltipOriginalNextSibling = tooltip.nextSibling;
+      tooltip.classList.add('matrix-floating-tooltip');
+      function moveTooltipToTopLayer() {
+        if (tooltip.parentNode !== document.body) document.body.appendChild(tooltip);
+      }
+      function restoreTooltipLayer() {
+        if (tooltipOriginalParent && tooltip.parentNode === document.body) {
+          tooltipOriginalParent.insertBefore(tooltip, tooltipOriginalNextSibling);
+        }
+      }
+      function hideTooltip() {
+        tooltip.style.visibility = 'hidden';
+        tooltip.style.opacity = '0';
+        tooltip.style.removeProperty('left');
+        tooltip.style.removeProperty('top');
+        tooltip.style.removeProperty('position');
+        tooltip.style.removeProperty('transform');
+        restoreTooltipLayer();
+        if (matrixTooltipState.trigger === trigger) {
+          matrixTooltipState.trigger = null;
+          matrixTooltipState.hide = null;
+        }
+      }
+      function placeTooltip(clientX, clientY) {
+        var width = Math.min(220, window.innerWidth - 20);
+        var left = clientX + 14;
+        var showAbove = isCategoryTooltip && clientY > 150;
+        var top = showAbove ? clientY - 12 : clientY + 14;
+        if (left + width > window.innerWidth - 8) left = Math.max(8, clientX - width - 14);
+        if (showAbove) {
+          tooltip.style.setProperty('transform', 'translateY(-100%)', 'important');
+        } else {
+          if (top + 140 > window.innerHeight - 8) top = Math.max(8, clientY - 150);
+          tooltip.style.setProperty('transform', 'none', 'important');
+        }
+        tooltip.style.setProperty('position', 'fixed', 'important');
+        tooltip.style.setProperty('left', left + 'px', 'important');
+        tooltip.style.setProperty('top', top + 'px', 'important');
+      }
+      trigger.addEventListener('mouseenter', function() {
+        if (matrixTooltipState.hide && matrixTooltipState.trigger !== trigger) matrixTooltipState.hide();
+        matrixTooltipState.trigger = trigger;
+        matrixTooltipState.hide = hideTooltip;
+        moveTooltipToTopLayer();
+        var rect = trigger.getBoundingClientRect();
+        placeTooltip(rect.right, rect.top + (rect.height / 2));
+        tooltip.style.visibility = 'visible';
+        tooltip.style.opacity = '1';
+      });
+      trigger.addEventListener('mousemove', function(event) {
+        placeTooltip(event.clientX, event.clientY);
+      });
+      trigger.addEventListener('mouseleave', function() {
+        hideTooltip();
+      });
+    });
+    if (!matrixTooltipState.guardAttached) {
+      matrixTooltipState.guardAttached = true;
+      document.addEventListener('mousemove', function(event) {
+        var activeTrigger = matrixTooltipState.trigger;
+        if (!activeTrigger || !matrixTooltipState.hide) return;
+        var hovered = document.elementFromPoint(event.clientX, event.clientY);
+        if (!hovered || !activeTrigger.contains(hovered)) matrixTooltipState.hide();
+      }, true);
+      window.addEventListener('scroll', function() {
+        if (matrixTooltipState.hide) matrixTooltipState.hide();
+      }, true);
+      window.addEventListener('resize', function() {
+        if (matrixTooltipState.hide) matrixTooltipState.hide();
+      });
+    }
+    var matrix = container.querySelector('.matrix-scroller');
+    var matrixBar = container.querySelector('.matrix-bottom-scroll');
+    var matrixBarInner = matrixBar && matrixBar.firstElementChild;
+    if (matrix && matrixBar && matrixBarInner) {
+      function updateMatrixScrollbar() {
+        var hasHorizontalOverflow = matrix.scrollWidth > matrix.clientWidth + 1;
+        matrixBar.style.display = hasHorizontalOverflow ? 'block' : 'none';
+        matrixBarInner.style.width = matrix.scrollWidth + 'px';
+      }
+      updateMatrixScrollbar();
+      matrixBar.addEventListener('scroll', function() { matrix.scrollLeft = matrixBar.scrollLeft; });
+      matrix.addEventListener('scroll', function() { matrixBar.scrollLeft = matrix.scrollLeft; });
+      matrix.addEventListener('wheel', function(event) {
+        if (event.shiftKey) {
+          event.preventDefault();
+          matrix.scrollLeft += event.deltaY || event.deltaX;
+        }
+      }, { passive:false });
+      matrixBar.addEventListener('wheel', function(event) {
+        if (event.shiftKey) {
+          event.preventDefault();
+          matrixBar.scrollLeft += event.deltaY || event.deltaX;
+        }
+      }, { passive:false });
+      window.addEventListener('resize', updateMatrixScrollbar);
+      if (window.ResizeObserver) new ResizeObserver(updateMatrixScrollbar).observe(matrix);
+    }
+  }
+
+  function getOverviewHeadDepthEvidence(response) {
+    if (!response || !response.success || !response.rows || !response.headers) return [];
+    var found = [], seen = {};
+    var robotColumn = response.roles && response.roles.robot >= 0 ? response.roles.robot : 0;
+    response.rows.some(function(row, rowIndex) {
+      row.forEach(function(value, index) {
+        var text = String(value || '').trim();
+        if (!text || seen[text] || !isImageCell(text, response.headers[index], 'headdepth')) return;
+        seen[text] = true;
+        found.push({
+          value: text,
+          header: response.headers[index] || 'Head depth image',
+          robotId: String(row[robotColumn] || '').trim(),
+          sheetRow: (response.headerRow || 1) + 1 + rowIndex,
+          sheetColumn: index + 1,
+          sheetName: response.sheetName || ''
+        });
+      });
+      return found.length >= 4;
+    });
+    return found;
+  }
+
+  function toggleMatrixInlineEdit() {
+    isMatrixEditMode = true;
+    dirtyMatrixCells = {};
+    if (rawOverviewResponse) renderOverview(rawOverviewResponse, rawHeadDepthResponse);
+  }
+
+  function cancelMatrixInlineEdit() {
+    isMatrixEditMode = false;
+    dirtyMatrixCells = {};
+    if (rawOverviewResponse) renderOverview(rawOverviewResponse, rawHeadDepthResponse);
+  }
+
+  function markCellDirty(inputEl) {
+    var row = parseInt(inputEl.getAttribute('data-row'), 10);
+    var col = parseInt(inputEl.getAttribute('data-col'), 10);
+    var orig = inputEl.getAttribute('data-orig') || '';
+    var val = (inputEl.dataset.saveValue || inputEl.value || '').trim();
+    var cellKey = row + '_' + col;
+
+    if (val !== orig.trim()) {
+      inputEl.classList.add('dirty');
+      dirtyMatrixCells[cellKey] = { row: row, col: col, val: val };
+    } else {
+      inputEl.classList.remove('dirty');
+      delete dirtyMatrixCells[cellKey];
+    }
+
+    var totalDirty = Object.keys(dirtyMatrixCells).length;
+    var saveBtn = document.querySelector('.panel-header .btn-action.success');
+    if (saveBtn) {
+      saveBtn.innerText = '💾 Save (' + totalDirty + ')';
+    }
+  }
+
+  function updateMatrixStatusHint(select) {
+    var hints = {
+      'Pass': 'Test passed.',
+      'Fail': 'Test failed and needs attention.',
+      'In-progress': 'Test is still running or awaiting a retest.',
+      'Warning': 'Warning: robot was repaired or the result needs review.',
+      'Done': 'ISO test completed for this robot.'
+    };
+    select.title = select.value === 'Custom' && select.dataset.customDescription ? select.dataset.customDescription : (hints[select.value] || 'Select ISO test status');
+    select.className = select.className.replace(/\bstatus-[a-z-]+\b/g, '').trim() + ' status-' + String(select.value || 'in-progress').toLowerCase().replace(/[^a-z]+/g, '-');
+  }
+
+  function askCustomMatrixStatus(select) {
+    if (select.value !== 'Custom') {
+      delete select.dataset.customDescription;
+      delete select.dataset.saveValue;
+      return;
+    }
+    var existingDescription = select.dataset.customDescription || '';
+    var description = existingDescription || window.prompt('Custom status description:', '');
+    if (description === null || !description.trim()) {
+      select.value = 'In-progress';
+      delete select.dataset.customDescription;
+      delete select.dataset.saveValue;
+      return;
+    }
+    select.dataset.customDescription = description.trim();
+    select.dataset.saveValue = 'Custom: ' + description.trim();
+    select.title = description.trim();
+  }
+
+  function saveMatrixInlineEdits() {
+    var updates = [];
+    for (var k in dirtyMatrixCells) {
+      updates.push(dirtyMatrixCells[k]);
+    }
+
+    if (updates.length === 0) {
+      cancelMatrixInlineEdit();
+      return;
+    }
+
+    var toast = document.getElementById('copyToast');
+    if (toast) {
+      toast.innerHTML = '<div class="spinner" style="width:16px;height:16px;border-top-color:#ffffff;"></div> <span>Saving ' + updates.length + ' updates...</span>';
+      toast.style.display = 'flex';
+    }
+
+    google.script.run
+      .withSuccessHandler(function(res) {
+        if (toast) toast.style.display = 'none';
+        if (res && res.success) {
+          isMatrixEditMode = false;
+          dirtyMatrixCells = {};
+          loadCurrentTab();
+          if (toast) {
+            toast.innerHTML = '<span style="color:#10b981; font-weight:800;">✔</span> <span style="margin-left:4px;">Matrix synchronized successfully</span>';
+            toast.style.display = 'flex';
+            setTimeout(function() { toast.style.display = 'none'; }, 2500);
+          }
+        } else {
+          alert('Save Error: ' + (res ? res.error : 'Unknown error'));
+        }
+      })
+      .withFailureHandler(function() {
+        if (toast) toast.style.display = 'none';
+        alert('Network Error saving table updates.');
+      })
+      .batchUpdateOverview(updates);
+  }
+
+  function openRobotDetailModal(robotName) {
+    if (!rawOverviewResponse) return;
+    activeAuditRobotName = robotName;
+    isAuditMetaEditing = false;
+
+    var robot = rawOverviewResponse.robots.find(function(r) { return r.name === robotName; });
+    var task = (robot && robot.task !== 'N/A' && robot.task !== '') ? robot.task : 'Active';
+    var cleanRobotName = robotName.replace(/[\r\n]+/g, ' ');
+
+    document.getElementById('auditModalModel').innerText = 'ROBOT ISO READINESS CHECKLIST';
+    document.getElementById('auditModalTitle').innerText = cleanRobotName;
+    document.getElementById('auditModalTask').innerText = task;
+    var sw = robot && robot.sw && robot.sw !== 'N/A' ? robot.sw : 'Not recorded';
+    var temp = robot && robot.temp && robot.temp !== 'N/A' ? robot.temp + '°C' : 'Not recorded';
+    var humidity = robot && robot.hum && robot.hum !== 'N/A' ? robot.hum + '%' : 'Not recorded';
+    document.getElementById('auditRobotMeta').innerHTML =
+      '<div><span>SW release</span><strong>' + escapeHtml(sw) + '</strong></div>' +
+      '<div><span>Temperature</span><strong>' + escapeHtml(temp) + '</strong></div>' +
+      '<div><span>Humidity</span><strong>' + escapeHtml(humidity) + '</strong></div>';
+    var contextValue = function(value) {
+      return value && value !== 'N/A' ? String(value) : 'Not recorded';
+    };
+    document.getElementById('auditRobotContext').innerHTML =
+      '<div><span>Owner in lab</span><strong>' + escapeHtml(contextValue(robot && robot.owner)) + '</strong></div>' +
+      '<div><span>Current main task</span><strong>' + escapeHtml(contextValue(robot && robot.task)) + '</strong></div>' +
+      '<div><span>RBT ticket</span><strong>' + escapeHtml(contextValue(robot && robot.rbtTicket)) + '</strong></div>' +
+      '<div><span>Robot IP in lab</span><strong>' + escapeHtml(contextValue(robot && robot.robotIp)) + '</strong></div>' +
+      '<div><span>Issue note</span><strong>' + escapeHtml(contextValue(robot && robot.issueNote)) + '</strong></div>' +
+      '<div><span>HW component fix/replacement</span><strong>' + escapeHtml(contextValue(robot && robot.hwFix)) + '</strong></div>';
+    document.getElementById('auditRobotMetaActions').innerHTML = '<button type="button" class="btn-ctrl" onclick="toggleRobotMetaEdit()">Edit robot info</button><button type="button" class="btn-ctrl" style="color:#b91c1c; border-color:#fecaca; margin-left:.4rem;" onclick="confirmDeleteOverviewRobot()">Delete robot</button>';
+
+    var totalDone = 0, passCount = 0, failCount = 0, warnCount = 0, remainingCount = 0;
+    var grouped = {};
+    getOrderedOverviewTests(rawOverviewResponse.tests).forEach(function(entry) {
+      var val = String(entry.test.results[robotName] || '').trim();
+      var state = getOverviewResultState(val);
+      if (state === 'pass') { passCount++; totalDone++; }
+      else if (state === 'fail') { failCount++; totalDone++; }
+      else if (state === 'attention') { warnCount++; totalDone++; }
+      else if (state === 'data') { totalDone++; }
+      else remainingCount++;
+
+      if (!grouped[entry.group.key]) grouped[entry.group.key] = { group: entry.group, tests: [] };
+      grouped[entry.group.key].tests.push({ test: entry.test, value: val, state: state });
+    });
+
+    document.getElementById('audit_total_done').innerText = totalDone + '/' + rawOverviewResponse.tests.length;
+    document.getElementById('audit_pass_count').innerText = passCount;
+    document.getElementById('audit_fail_count').innerText = failCount;
+    document.getElementById('audit_warn_count').innerText = warnCount + remainingCount;
+
+    var breakdownHtml = '<div class="robot-checklist-legend"><span class="pass">Passed</span><span class="fail">Failed</span><span class="attention">Needs action</span><span class="remaining">Not performed</span></div>';
+    var lastChecklistPhase = '';
+    Object.keys(grouped).forEach(function(key) {
+      var section = grouped[key];
+      if (section.group.phase !== lastChecklistPhase) {
+        if (lastChecklistPhase) breakdownHtml += '</div>';
+        breakdownHtml += '<div class="robot-checklist-phase"><span>' + escapeHtml(section.group.phase) + '</span></div>';
+        breakdownHtml += '<div class="robot-checklist-phase-list">';
+        lastChecklistPhase = section.group.phase;
+      }
+      section.tests.forEach(function(item) {
+        var label = item.test.item || item.test.purpose || 'Unnamed test';
+        var detail = item.test.purpose && item.test.purpose !== item.test.item ? item.test.purpose : '';
+        var statusLabel = getChecklistStatusLabel(item.value, item.state);
+        var statusDetail = item.value || statusLabel;
+        breakdownHtml += '<div class="robot-checklist-item state-' + item.state + '"><span class="check-icon">' +
+          (item.state === 'pass' || item.state === 'data' ? '✓' : (item.state === 'fail' ? '×' : (item.state === 'not-performed' ? '—' : '!'))) + '</span><div class="check-copy"><strong>' + escapeHtml(label) + '</strong>' +
+          (detail ? '<small>' + escapeHtml(detail) + '</small>' : '') + '</div><span class="check-status" title="' + escapeHtml(statusDetail) + '">' + escapeHtml(statusLabel) + '</span></div>';
+      });
+    });
+    if (lastChecklistPhase) breakdownHtml += '</div>';
+
+    document.getElementById('auditSensorBreakdown').innerHTML = breakdownHtml;
+    document.getElementById('robotDetailModal').style.display = 'flex';
+  }
+
+  function closeRobotDetailModal() {
+    document.getElementById('robotDetailModal').style.display = 'none';
+  }
+
+  function toggleRobotMetaEdit() {
+    var robot = rawOverviewResponse && rawOverviewResponse.robots.find(function(r) { return r.name === activeAuditRobotName; });
+    if (!robot) return;
+    var meta = document.getElementById('auditRobotMeta');
+    var actions = document.getElementById('auditRobotMetaActions');
+    if (!isAuditMetaEditing) {
+      meta.innerHTML =
+        '<div><span>SW release</span><input id="auditEditSw" value="' + escapeHtml(robot.sw === 'N/A' ? '' : robot.sw || '') + '"></div>' +
+        '<div><span>Temperature</span><input id="auditEditTemp" value="' + escapeHtml(robot.temp === 'N/A' ? '' : robot.temp || '') + '"></div>' +
+        '<div><span>Humidity</span><input id="auditEditHumidity" value="' + escapeHtml(robot.hum === 'N/A' ? '' : robot.hum || '') + '"></div>';
+      actions.innerHTML = '<button type="button" class="btn-ctrl" onclick="cancelRobotMetaEdit()">Cancel</button><button type="button" class="btn-action" onclick="saveRobotMetaEdit()">Save</button>';
+      isAuditMetaEditing = true;
+    } else {
+      saveRobotMetaEdit();
+    }
+  }
+
+  function cancelRobotMetaEdit() {
+    if (rawOverviewResponse) openRobotDetailModal(activeAuditRobotName);
+  }
+
+  function saveRobotMetaEdit() {
+    var payload = {
+      robotName: activeAuditRobotName,
+      sw: document.getElementById('auditEditSw').value.trim(),
+      temp: document.getElementById('auditEditTemp').value.trim(),
+      humidity: document.getElementById('auditEditHumidity').value.trim()
+    };
+    var actions = document.getElementById('auditRobotMetaActions');
+    actions.innerHTML = '<span style="font-size:.65rem; color:var(--text-muted);">Saving...</span>';
+    google.script.run
+      .withSuccessHandler(function(res) {
+        if (!res || !res.success) { alert('Update robot info error: ' + (res && res.error ? res.error : 'Unknown error')); openRobotDetailModal(activeAuditRobotName); return; }
+        var robot = rawOverviewResponse.robots.find(function(r) { return r.name === activeAuditRobotName; });
+        if (robot) { robot.sw = payload.sw || 'N/A'; robot.temp = payload.temp || 'N/A'; robot.hum = payload.humidity || 'N/A'; }
+        // Re-render the Overview cards as well as the open detail modal so both
+        // locations always show the same robot metadata immediately.
+        renderOverview(rawOverviewResponse, rawHeadDepthResponse);
+        openRobotDetailModal(activeAuditRobotName);
+      })
+      .withFailureHandler(function(err) {
+        alert('Network Error updating robot info: ' + (err && err.message ? err.message : 'Unknown error'));
+        openRobotDetailModal(activeAuditRobotName);
+      })
+      .updateOverviewRobotMetadata(payload);
+  }
+
+  function confirmDeleteOverviewRobot() {
+    if (!activeAuditRobotName) return;
+    var confirmed = window.confirm('Delete ' + activeAuditRobotName + ' from the Test Execution Matrix?\n\nOnly the robot column in Overview P/F will be removed. Module records will remain.');
+    if (!confirmed) return;
+    google.script.run
+      .withSuccessHandler(function(res) {
+        if (!res || !res.success) { alert('Delete robot error: ' + (res && res.error ? res.error : 'Unknown error')); return; }
+        closeRobotDetailModal();
+        loadCurrentTab();
+      })
+      .withFailureHandler(function(err) {
+        alert('Network Error deleting robot: ' + (err && err.message ? err.message : 'Unknown error'));
+      })
+      .deleteOverviewRobot(activeAuditRobotName);
+  }
+
+  function openOverviewEditModal(rowIndex) {
+    if (!rawOverviewResponse || !rawOverviewResponse.tests[rowIndex]) return;
+    activeOverviewEditRow = rawOverviewResponse.tests[rowIndex];
+
+    document.getElementById('overviewModalTitle').innerText = 'Edit Benchmark: ' + activeOverviewEditRow.item;
+    document.getElementById('ov_purpose').value = activeOverviewEditRow.purpose || '';
+
+    var botContainer = document.getElementById('ov_robot_fields');
+    var bHtml = '';
+    
+    rawOverviewResponse.robots.forEach(function(rob) {
+      var currentVal = activeOverviewEditRow.results[rob.name] || '';
+      // Safely strip hidden line breaks for input labels
+      var cleanRobName = rob.name.replace(/[\r\n]+/g, ' ');
+
+      bHtml += '<div class="form-group" style="margin-bottom:0.4rem;">' +
+        '<label style="font-size:0.7rem; font-weight:700;">' + cleanRobName + '</label>' +
+        '<input type="text" id="ov_rob_' + rob.col + '" value="' + currentVal.replace(/"/g, '&quot;') + '" placeholder="Pass, Fail, 17.00">' +
+      '</div>';
+    });
+
+    botContainer.innerHTML = bHtml;
+    document.getElementById('overviewEditModal').style.display = 'flex';
+  }
+
+  function closeOverviewEditModal() { document.getElementById('overviewEditModal').style.display = 'none'; }
+
+  function submitOverviewForm(e) {
+    e.preventDefault();
+    if (!activeOverviewEditRow) return;
+
+    var saveBtn = document.getElementById('ovSaveBtn');
+    saveBtn.innerText = 'Saving...';
+    saveBtn.disabled = true;
+
+    var robotUpdates = {};
+    rawOverviewResponse.robots.forEach(function(rob) {
+      var inputEl = document.getElementById('ov_rob_' + rob.col);
+      if (inputEl) robotUpdates[rob.col] = inputEl.value.trim();
+    });
+
+    var payload = {
+      sheetRow: activeOverviewEditRow.sheetRow,
+      purposeCol: activeOverviewEditRow.purposeCol,
+      purpose: document.getElementById('ov_purpose').value.trim(),
+      robotUpdates: robotUpdates
+    };
+
+    google.script.run
+      .withSuccessHandler(function(res) {
+        saveBtn.innerText = 'Save Changes';
+        saveBtn.disabled = false;
+        closeOverviewEditModal();
+        if (res && res.success) {
+          loadCurrentTab();
+        } else {
+          alert("Update Error: " + (res ? res.error : "Unknown error"));
+        }
+      })
+      .withFailureHandler(function() {
+        saveBtn.innerText = 'Save Changes';
+        saveBtn.disabled = false;
+        alert("Network Error updating overview record.");
+      })
+      .updateOverviewRecord(payload);
+  }
+</script>

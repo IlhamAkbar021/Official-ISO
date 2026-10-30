@@ -1,0 +1,49 @@
+<script>
+  function renderWifiModal() {
+    document.getElementById('modalTitle').innerText = 'Add New Wi-Fi Record';
+    document.getElementById('formBody').innerHTML = 
+      '<div class="form-group"><label>Robot ID</label><input type="text" id="w_robot" list="registeredRobotList" onfocus="hydrateRegisteredRobotList()" placeholder="e.g. AC3110DVT1-6" required></div>' +
+      '<div class="form-group"><label>Tester Name</label><input type="text" id="w_tester" list="registeredTesterList" onfocus="hydrateRegisteredTesterList()" placeholder="e.g. Mike" required></div>' +
+      '<div class="form-group"><label>RIGHT Side Antenna (dBm)</label><input type="number" id="w_right" placeholder="-57" required></div>' +
+      '<div class="form-group"><label>RIGHT Side Test Data Link</label><input type="url" id="w_right_link" placeholder="https://..."></div>' +
+      '<div class="form-group"><label>LEFT Side Antenna (dBm)</label><input type="number" id="w_left" placeholder="-58" required></div>' +
+      '<div class="form-group"><label>LEFT Side Test Data Link</label><input type="url" id="w_left_link" placeholder="https://..."></div>';
+  }
+
+  function openEditModal(rowIndex) {
+    isEditing = true;
+    activeEditRowIndex = rowIndex;
+    var row = rawWifiResponse.rows[rowIndex] || [];
+    
+    document.getElementById('modalTitle').innerText = 'Edit Wi-Fi Record (' + (row[1] || '') + ')';
+    document.getElementById('deleteBtn').style.display = 'inline-flex';
+    
+    document.getElementById('formBody').innerHTML = 
+      '<div class="form-group"><label>Robot ID (Read Only)</label><input type="text" value="' + (row[1] || '') + '" disabled style="opacity:0.7;"></div>' +
+      '<div class="form-group"><label>Tester Name</label><input type="text" id="w_tester" list="registeredTesterList" onfocus="hydrateRegisteredTesterList()" value="' + (row[2] || '') + '" required></div>' +
+      '<div class="form-group"><label>RIGHT Side Antenna (dBm)</label><input type="number" id="w_right" value="' + (row[3] || '') + '" required></div>' +
+      '<div class="form-group"><label>RIGHT Side Test Data Link</label><input type="url" id="w_right_link" value="' + (row[7] || '') + '" placeholder="https://..."></div>' +
+      '<div class="form-group"><label>LEFT Side Antenna (dBm)</label><input type="number" id="w_left" value="' + (row[9] || '') + '" required></div>' +
+      '<div class="form-group"><label>LEFT Side Test Data Link</label><input type="url" id="w_left_link" value="' + (row[13] || '') + '" placeholder="https://..."></div>';
+    
+    document.getElementById('inputModal').style.display = 'flex';
+  }
+
+  function submitWifiForm() {
+    var payload = {
+      rowIndex: activeEditRowIndex,
+      robotId: isEditing ? (rawWifiResponse.rows[activeEditRowIndex][1] || '') : document.getElementById('w_robot').value,
+      tester: document.getElementById('w_tester').value,
+      rightAntenna: document.getElementById('w_right').value,
+      rightLink: document.getElementById('w_right_link').value,
+      leftAntenna: document.getElementById('w_left').value,
+      leftLink: document.getElementById('w_left_link').value
+    };
+
+    if (isEditing) { 
+      google.script.run.withSuccessHandler(handleSuccess).withFailureHandler(handleFail).updateWifiRecord(payload); 
+    } else { 
+      google.script.run.withSuccessHandler(handleSuccess).withFailureHandler(handleFail).addWifiRecord(payload); 
+    }
+  }
+</script>
