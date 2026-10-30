@@ -62,6 +62,8 @@ passwords. The registered tester directory is stored in Apps Script
 git checkout main
 git pull
 git checkout -b feature/dvt3-robot
+
+Update Code
 clasp push
 git add .
 git commit -m "Add DVT3 robot support"
