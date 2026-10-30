@@ -182,7 +182,7 @@ function batchUpdateOverview(updates) {
       }
     });
 
-    try { CacheService.getScriptCache().remove('iso_overview_v2'); } catch (cacheError) { /* optional */ }
+    try { CacheService.getScriptCache().remove('iso_overview_v3'); } catch (cacheError) { /* optional */ }
 
     return { success: true, count: updates.length };
   } catch (err) {
@@ -241,21 +241,43 @@ function addOverviewRobot(robot) {
     }
     if (existing[name.toLowerCase()]) return { success: false, error: 'This robot already exists.' };
 
-    var insertAfter = 0;
-    robotColumns.forEach(function(item) {
-      if (item.cohort === newCohort && item.column > insertAfter) insertAfter = item.column;
+    var cohortColumns = robotColumns.filter(function(item) { return item.cohort === newCohort; });
+    var newSequenceMatch = name.match(/[-_\s](\d+)\s*$/);
+    var newSequence = newSequenceMatch ? Number(newSequenceMatch[1]) : Number.MAX_VALUE;
+    var insertBefore = null;
+    cohortColumns.forEach(function(item) {
+      var itemSequenceMatch = String(item.name || '').match(/[-_\s](\d+)\s*$/);
+      var itemSequence = itemSequenceMatch ? Number(itemSequenceMatch[1]) : Number.MAX_VALUE;
+      if (itemSequence > newSequence && (!insertBefore || item.column < insertBefore)) {
+        insertBefore = item.column;
+      }
     });
-    // For a new cohort (for example DVT3), place it after the last robot
-    // column instead of after unrelated columns elsewhere in the sheet.
-    if (!insertAfter) {
-      robotColumns.forEach(function(item) {
+
+    var templateColumn;
+    var newCol;
+    if (insertBefore) {
+      // Insert before the first higher-numbered robot, preserving DVT3-1,
+      // DVT3-2, DVT3-3 order even when an earlier robot is re-created.
+      sheet.insertColumnBefore(insertBefore);
+      newCol = insertBefore;
+      templateColumn = insertBefore + 1;
+    } else {
+      var insertAfter = 0;
+      cohortColumns.forEach(function(item) {
         if (item.column > insertAfter) insertAfter = item.column;
       });
+      // For a new cohort (for example DVT3), place it after the last robot
+      // column instead of after unrelated columns elsewhere in the sheet.
+      if (!insertAfter) {
+        robotColumns.forEach(function(item) {
+          if (item.column > insertAfter) insertAfter = item.column;
+        });
+      }
+      if (!insertAfter) return { success: false, error: 'Last robot column could not be detected.' };
+      templateColumn = insertAfter;
+      sheet.insertColumnAfter(insertAfter);
+      newCol = insertAfter + 1;
     }
-    if (!insertAfter) return { success: false, error: 'Last robot column could not be detected.' };
-    var templateColumn = insertAfter;
-    sheet.insertColumnAfter(insertAfter);
-    var newCol = insertAfter + 1;
     var maxRows = sheet.getMaxRows();
     if (templateColumn > 0) {
       var templateRange = sheet.getRange(1, templateColumn, maxRows, 1);
@@ -287,7 +309,7 @@ function addOverviewRobot(robot) {
       else if (rowText.indexOf('temperature') !== -1) sheet.getRange(row + 1, newCol).setValue(String(robot.temp || '').trim());
       else if (rowText.indexOf('humidity') !== -1) sheet.getRange(row + 1, newCol).setValue(String(robot.humidity || '').trim());
     }
-    try { CacheService.getScriptCache().remove('iso_overview_v2'); } catch (cacheError) { /* optional */ }
+    try { CacheService.getScriptCache().remove('iso_overview_v3'); } catch (cacheError) { /* optional */ }
     return { success: true, name: name, column: newCol };
   } catch (err) {
     return { success: false, error: err.toString() };
@@ -326,7 +348,7 @@ function updateOverviewRobotMetadata(payload) {
       else if (rowText.indexOf('temperature') !== -1) sheet.getRange(row + 1, robotColumn).setValue(String(payload.temp || '').trim());
       else if (rowText.indexOf('humidity') !== -1) sheet.getRange(row + 1, robotColumn).setValue(String(payload.humidity || '').trim());
     }
-    try { CacheService.getScriptCache().remove('iso_overview_v2'); } catch (cacheError) { /* optional */ }
+    try { CacheService.getScriptCache().remove('iso_overview_v3'); } catch (cacheError) { /* optional */ }
     return { success: true };
   } catch (err) {
     return { success: false, error: err.toString() };
@@ -349,16 +371,20 @@ function deleteOverviewRobot(robotName) {
     if (!sheet) return { success: false, error: 'Overview sheet not found.' };
 
     var values = sheet.getDataRange().getDisplayValues();
+    var normalizeRobotName = function(value) {
+      return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    };
+    var requestedRobot = normalizeRobotName(robotName);
     var robotColumn = -1;
     for (var r = 0; r < Math.min(5, values.length); r++) {
       for (var c = 0; c < values[r].length; c++) {
-        if (String(values[r][c] || '').trim().toLowerCase() === robotName.toLowerCase()) { robotColumn = c + 1; break; }
+        if (normalizeRobotName(values[r][c]) === requestedRobot) { robotColumn = c + 1; break; }
       }
       if (robotColumn !== -1) break;
     }
     if (robotColumn === -1) return { success: false, error: 'Robot column not found.' };
     sheet.deleteColumn(robotColumn);
-    try { CacheService.getScriptCache().remove('iso_overview_v2'); } catch (cacheError) { /* optional */ }
+    try { CacheService.getScriptCache().remove('iso_overview_v3'); } catch (cacheError) { /* optional */ }
     return { success: true, name: robotName };
   } catch (err) {
     return { success: false, error: err.toString() };
