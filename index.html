@@ -3,7 +3,7 @@
 <head>
   <base target="_top">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <?!= include('CSS'); ?>
+  <?!= include('styles/CSS'); ?>
 </head>
 <body>
 
@@ -226,21 +226,21 @@
   <datalist id="registeredRobotList"></datalist>
   <datalist id="registeredTesterList"></datalist>
 
-  <?!= include('BaseDepth_JS'); ?>
-  <?!= include('IRCliff_JS'); ?>
-  <?!= include('RatedSpeed_JS'); ?>
-  <?!= include('EStop_JS'); ?>
-  <?!= include('TurningWidth_JS'); ?>
-  <?!= include('CliffLowerSpeed_JS'); ?>
-  <?!= include('TraverseGap_JS'); ?>
-  <?!= include('NarrowCorridor_JS'); ?>
-  <?!= include('AprilTag_JS'); ?>
-  <?!= include('Modules_UI'); ?>
-  <?!= include('App_JS'); ?>
-  <?!= include('HeadDepth_JS'); ?>
-  <?!= include('Overview_JS'); ?>
-  <?!= include('WiFi_JS'); ?>
-  <?!= include('Lidar_JS'); ?>
+  <?!= include('client/modules/static/BaseDepth_JS'); ?>
+  <?!= include('client/modules/static/HeadDepth_JS'); ?>
+  <?!= include('client/modules/static/IRCliff_JS'); ?>
+  <?!= include('client/modules/static/Lidar_JS'); ?>
+  <?!= include('client/modules/static/WiFi_JS'); ?>
+  <?!= include('client/modules/dynamic/RatedSpeed_JS'); ?>
+  <?!= include('client/modules/dynamic/EStop_JS'); ?>
+  <?!= include('client/modules/dynamic/TurningWidth_JS'); ?>
+  <?!= include('client/modules/dynamic/CliffLowerSpeed_JS'); ?>
+  <?!= include('client/modules/dynamic/TraverseGap_JS'); ?>
+  <?!= include('client/modules/dynamic/NarrowCorridor_JS'); ?>
+  <?!= include('client/modules/dynamic/AprilTag_JS'); ?>
+  <?!= include('client/Modules_UI'); ?>
+  <?!= include('client/App_JS'); ?>
+  <?!= include('client/Overview_JS'); ?>
 
 </body>
 </html>

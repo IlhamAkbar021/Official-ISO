@@ -10,20 +10,17 @@ Google Sheets.
 
 ### Application shell
 
-- `Code.js` — web-app entry point, shared configuration, and HTML includes.
-- `AppCore.js` — namespaced core layer: configuration, tester service, and web-app controller.
+- `server/Code.js` — web-app entry point, shared configuration, and HTML includes.
+- `server/AppCore.js` — namespaced core layer: configuration, tester service, and web-app controller.
 - `index.html` — page layout and HTML partial includes.
-- `CSS.html` — shared styles.
+- `styles/CSS.html` — shared styles.
 
 ### Server-side data access
 
-- `Modules.js` — generic ISO sheet discovery, normalization, image loading, and
+- `server/Modules.js` — generic ISO sheet discovery, normalization, image loading, and
   generic CRUD operations.
-- `ISOConfig.js` — module names, aliases, phases, and sheet matching rules.
-- `Overview.js` — overview matrix data and batch updates.
-- `StaticISO.js` — shared sheet lookup helper for fixed-format static data.
-- `Lidar.js` — LiDAR-specific split-table reader and CRUD operations.
-- `WiFi.js` — Wi-Fi-specific reader and CRUD operations.
+- `server/ISOConfig.js`, `server/Overview.js`, `server/StaticISO.js`,
+  `server/Lidar.js`, and `server/WiFi.js` — feature-specific server services.
 
 ### Module endpoint files
 
@@ -34,16 +31,16 @@ function names while delegating shared work to `Modules.js`.
 
 ### Browser-side feature partials
 
-- `App_JS.html` — application state, navigation, forms, and shared actions.
-- `Modules_UI.html` — browser registry for all module identities and renderers.
-- `BaseDepth_JS.html` — Base Depth Camera browser metadata and UI boundary.
-- `IRCliff_JS.html` — IR Cliff browser metadata and UI boundary.
+- `client/App_JS.html` — application state, navigation, forms, and shared actions.
+- `client/Modules_UI.html` — browser registry for all module identities and renderers.
+- `client/modules/static/BaseDepth_JS.html` — Base Depth Camera browser metadata and UI boundary.
+- `client/modules/static/IRCliff_JS.html` — IR Cliff browser metadata and UI boundary.
 - `RatedSpeed_JS.html`, `EStop_JS.html`, `TurningWidth_JS.html`,
   `CliffLowerSpeed_JS.html`, `TraverseGap_JS.html`, `NarrowCorridor_JS.html`,
   and `AprilTag_JS.html` — Dynamic ISO browser metadata and UI boundaries.
-- `Overview_JS.html` — overview matrix rendering and editing.
-- `Lidar_JS.html` — LiDAR form and rendering logic.
-- `WiFi_JS.html` — Wi-Fi form and rendering logic.
+- `client/Overview_JS.html` — overview matrix rendering and editing.
+- `client/modules/static/Lidar_JS.html` — LiDAR form and rendering logic.
+- `client/modules/static/WiFi_JS.html` — Wi-Fi form and rendering logic.
 
 ## Conventions
 
@@ -58,9 +55,9 @@ function names while delegating shared work to `Modules.js`.
    keep `Code.js` limited to Apps Script public entry points and compatibility
    adapters.
 7. A feature owns its data access and renderer: do not put LiDAR logic in
-   `Modules.js`, or module-specific DOM code in `App_JS.html`.
+   `server/Modules.js`, or module-specific DOM code in `client/App_JS.html`.
 8. Browser code should follow the same boundary: shared state/navigation in
-   `App_JS.html`, overview-only rendering in `Overview_JS.html`, and each
+   `client/App_JS.html`, overview-only rendering in `client/Overview_JS.html`, and each
    feature's form/table behavior in its matching partial.
 9. When adding a service, expose a small class API (`list`, `get`, `save`,
    `remove`) and keep Google Sheets calls inside that service.
