@@ -109,6 +109,7 @@
   .btn-ctrl.primary:hover { background: #dbeafe; }
 
   .content-scroll-area { flex: 1; overflow-y: auto; overflow-x: hidden; padding: .65rem 2rem 2.25rem; display: flex; flex-direction: column; }
+  .content-scroll-area.lidar-table-only-scroll { overflow:hidden; }
 
   /* One-page overview dashboard */
   .dashboard-intro { display:flex; justify-content:space-between; align-items:flex-end; gap:1rem; padding:.8rem 0 1rem; }
@@ -281,6 +282,10 @@
   /* LiDAR uses explicit column geometry so headers and data stay symmetrical. */
   .lidar-panel { overflow:hidden; border-radius:12px; }
   .lidar-panel .table-scroller { padding-bottom:0; }
+  .lidar-sections { display:flex; flex-direction:column; gap:0; }
+  .lidar-section { min-width:0; border-top:1px solid var(--border); }
+  .lidar-section:first-child { border-top:0; }
+  .lidar-section h3 { margin:0; padding:.7rem 1rem .55rem; color:var(--text-primary); font-size:.82rem; font-weight:800; }
   .lidar-table { table-layout:fixed; width:100%; }
   .lidar-table th,
   .lidar-table td { height:44px; padding:.55rem .6rem; text-align:center; vertical-align:middle; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -1044,10 +1049,10 @@
 
   /* LiDAR accuracy and tilt each get their own vertical scroll area. */
   .lidar-panel .table-scroller {
-    height: min(46vh, 430px);
-    max-height: min(46vh, 430px);
-    min-height: 120px;
-    overflow-y: scroll;
+    height: min(38vh, 360px);
+    max-height: 360px;
+    min-height: 180px;
+    overflow-y: auto;
     overflow-x: auto;
     overscroll-behavior: contain;
   }

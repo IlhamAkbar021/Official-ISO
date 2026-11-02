@@ -150,6 +150,8 @@
       if (tabSearch) tabSearch.value = '';
     }
     currentTab = tabId;
+    var pageScroller = document.querySelector('.content-scroll-area');
+    if (pageScroller) pageScroller.classList.toggle('lidar-table-only-scroll', tabId === 'lidar');
     
     document.querySelectorAll('.nav-item').forEach(function(btn) { btn.classList.remove('active'); });
     var activeBtn = document.getElementById('nav-' + tabId);
@@ -1400,6 +1402,8 @@
 
   function renderSplitLidarTable(response) {
     rawLidarResponse = response;
+    var pageScroller = document.querySelector('.content-scroll-area');
+    if (pageScroller) pageScroller.classList.add('lidar-table-only-scroll');
     var container = document.getElementById('tableContainer');
     if (!response || response.error) {
       container.innerHTML = '<div class="panel-card"><div style="color:#ef4444; padding:2rem; text-align:center;">' + (response ? response.error : 'Error loading LiDAR data') + '</div></div>';
@@ -1408,9 +1412,11 @@
 
     var html = '';
 
+    html += '<div class="panel-card lidar-panel"><div class="panel-header"><h2>LiDAR Data Collection</h2></div><div class="lidar-sections">';
+
     if (activeLidarSubTab === 'all' || activeLidarSubTab === 'accuracy') {
       var groupedAccuracy = groupLidarAccuracyPivoted(response.accuracy.rows);
-      html += '<div class="panel-card lidar-panel"><div class="panel-header"><h2>LiDAR Accuracy Data Collection</h2></div><div class="table-scroller"><table class="lidar-table lidar-accuracy-table">' +
+      html += '<section class="lidar-section"><h3>LiDAR Accuracy Data Collection</h3><div class="table-scroller lidar-table-scroll"><table class="lidar-table lidar-accuracy-table">' +
         '<colgroup><col style="width:18%"><col style="width:11%"><col style="width:14%"><col style="width:9%"><col style="width:14%"><col style="width:14%"><col style="width:14%"><col style="width:6%"></colgroup><thead><tr>' +
         '<th>Robot ID</th><th>Date</th><th>SW Version</th><th>Tester</th><th>A - 5m</th><th>B - 10m</th><th>C - 15m</th><th>' + t('actions') + '</th>' +
       '</tr></thead><tbody>';
@@ -1428,12 +1434,12 @@
           '</tr>';
         });
       }
-      html += '</tbody></table></div></div>';
+      html += '</tbody></table></div></section>';
     }
 
     if (activeLidarSubTab === 'all' || activeLidarSubTab === 'tilt') {
       var tiltRows = filterRows(response.tilt.rows);
-      html += '<div class="panel-card lidar-panel"><div class="panel-header"><h2>LiDAR Tilt Data Collection</h2></div><div class="table-scroller"><table class="lidar-table lidar-tilt-table">' +
+      html += '<section class="lidar-section"><h3>LiDAR Tilt Data Collection</h3><div class="table-scroller lidar-table-scroll"><table class="lidar-table lidar-tilt-table">' +
         '<colgroup><col style="width:10%"><col style="width:8%"><col style="width:9%"><col style="width:7%"><col style="width:8%"><col style="width:9%"><col style="width:8%"><col style="width:8%"><col style="width:12%"><col style="width:6%"><col style="width:6%"><col style="width:5%"><col style="width:4%"></colgroup><thead><tr>';
       response.tilt.headers.forEach(function(h) { html += '<th>' + (h || '-') + '</th>'; });
       html += '<th>' + t('actions') + '</th></tr></thead><tbody>';
@@ -1445,8 +1451,9 @@
           html += '<tr>' + buildRowCells(item.row, 0) + '<td>' + renderActionDropdown('lidar_tilt', item.originalIndex) + '</td></tr>'; 
         });
       }
-      html += '</tbody></table></div></div>';
+      html += '</tbody></table></div></section>';
     }
+    html += '</div></div>';
     container.innerHTML = html;
   }
 
