@@ -305,22 +305,8 @@
       '<div class="general-footnote">Use the left navigation to move between test groups. Green means pass, amber needs review, and red requires action.</div></div>';
   }
 
-  var DASHBOARD_MODULES = [
-    { group: 'Static ISO', key: 'lidar', title: 'LiDAR', method: 'getLidarData' },
-    { group: 'Static ISO', key: 'headdepth', title: 'Head Depth Camera', method: 'getHeadDepthData' },
-    { group: 'Static ISO', key: 'basedepth', title: 'Base Depth Camera', method: 'getBaseDepthData' },
-    { group: 'Static ISO', key: 'cliff', title: 'IR Cliff', method: 'getIRCliffData' },
-    { group: 'Static ISO', key: 'wifi', title: 'Wi-Fi', method: 'getWifiData' },
-    { group: 'Dynamic ISO', key: 'ratedspeed', title: 'Rated Speed', method: 'getRatedSpeedData' },
-    { group: 'Dynamic ISO', key: 'estop', title: 'E-Stop', method: 'getEStopData' },
-    { group: 'Dynamic ISO', key: 'turningwidth', title: 'Turning Width', method: 'getTurningWidthData' },
-    { group: 'Dynamic ISO', key: 'clifflowerspeed', title: 'Cliff · Lower Speed', method: 'getCliffLowerSpeedData' },
-    { group: 'Dynamic ISO', key: 'traversegap', title: 'Traverse Gap', method: 'getTraverseGapData' },
-    { group: 'Dynamic ISO', key: 'narrow', title: 'Narrow Corridor', method: 'getNarrowCorridorData' },
-    { group: 'Dynamic ISO', key: 'apriltag', title: 'AprilTag', method: 'getAprilTagData' },
-    { group: 'Accuracy & Repeatability', key: 'accuracylaser', title: 'Laser Detection', method: 'getModuleData' },
-    { group: 'Accuracy & Repeatability', key: 'accuracyapriltag', title: 'AprilTag Detection', method: 'getModuleData' }
-  ];
+  // Module identity lives in Modules_UI.html; shared behavior stays here.
+  var DASHBOARD_MODULES = MODULE_UI_REGISTRY;
 
   function loadAllModulesDashboard() {
     var requestId = ++loadRequestId;

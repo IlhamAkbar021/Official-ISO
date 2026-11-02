@@ -11,6 +11,7 @@ Google Sheets.
 ### Application shell
 
 - `Code.js` — web-app entry point, shared configuration, and HTML includes.
+- `AppCore.js` — namespaced core layer: configuration, tester service, and web-app controller.
 - `index.html` — page layout and HTML partial includes.
 - `CSS.html` — shared styles.
 
@@ -34,6 +35,12 @@ function names while delegating shared work to `Modules.js`.
 ### Browser-side feature partials
 
 - `App_JS.html` — application state, navigation, forms, and shared actions.
+- `Modules_UI.html` — browser registry for all module identities and renderers.
+- `BaseDepth_JS.html` — Base Depth Camera browser metadata and UI boundary.
+- `IRCliff_JS.html` — IR Cliff browser metadata and UI boundary.
+- `RatedSpeed_JS.html`, `EStop_JS.html`, `TurningWidth_JS.html`,
+  `CliffLowerSpeed_JS.html`, `TraverseGap_JS.html`, `NarrowCorridor_JS.html`,
+  and `AprilTag_JS.html` — Dynamic ISO browser metadata and UI boundaries.
 - `Overview_JS.html` — overview matrix rendering and editing.
 - `Lidar_JS.html` — LiDAR form and rendering logic.
 - `WiFi_JS.html` — Wi-Fi form and rendering logic.
@@ -46,6 +53,17 @@ function names while delegating shared work to `Modules.js`.
 4. Keep browser code in the matching `*_JS.html` partial.
 5. Use a trailing underscore for private server helpers, such as
    `findIsoModuleSheet_`.
+
+6. Prefer `ISOApp.*` namespaces and classes for new cross-cutting server code;
+   keep `Code.js` limited to Apps Script public entry points and compatibility
+   adapters.
+7. A feature owns its data access and renderer: do not put LiDAR logic in
+   `Modules.js`, or module-specific DOM code in `App_JS.html`.
+8. Browser code should follow the same boundary: shared state/navigation in
+   `App_JS.html`, overview-only rendering in `Overview_JS.html`, and each
+   feature's form/table behavior in its matching partial.
+9. When adding a service, expose a small class API (`list`, `get`, `save`,
+   `remove`) and keep Google Sheets calls inside that service.
 
 Apps Script loads top-level project files globally. For that reason, this
 project uses clear file sections and a file map instead of nested folders.

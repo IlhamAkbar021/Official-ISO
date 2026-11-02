@@ -419,7 +419,7 @@
     
     html += '</div></div></div>'; // End Right Column & Layout Wrapper
     container.innerHTML = html;
-    var matrixTooltipState = window.__matrixTooltipState || (window.__matrixTooltipState = { trigger: null, hide: null, guardAttached: false });
+    var matrixTooltipState = window.__matrixTooltipState || (window.__matrixTooltipState = { trigger: null, hide: null, reposition: null, guardAttached: false });
     container.querySelectorAll('.overview-matrix-table .info-tooltip').forEach(function(trigger) {
       var tooltip = trigger.querySelector('.tooltip-text');
       if (!tooltip) return;
@@ -446,18 +446,26 @@
         if (matrixTooltipState.trigger === trigger) {
           matrixTooltipState.trigger = null;
           matrixTooltipState.hide = null;
+          matrixTooltipState.reposition = null;
         }
       }
       function placeTooltip(clientX, clientY) {
         var width = Math.min(220, window.innerWidth - 20);
         var left = clientX + 14;
-        var showAbove = isCategoryTooltip && clientY > 150;
+        var tooltipHeight = 120;
+        var edgeGap = 8;
+        var spaceAbove = clientY - edgeGap;
+        var spaceBelow = window.innerHeight - clientY - edgeGap;
+        // Keep the popover inside the visible viewport, including for the
+        // final threshold row near the matrix scrollbar. Prefer below when it
+        // fits, otherwise place it above the trigger.
+        var showAbove = spaceBelow < tooltipHeight && spaceAbove > spaceBelow;
         var top = showAbove ? clientY - 12 : clientY + 14;
         if (left + width > window.innerWidth - 8) left = Math.max(8, clientX - width - 14);
         if (showAbove) {
           tooltip.style.setProperty('transform', 'translateY(-100%)', 'important');
         } else {
-          if (top + 140 > window.innerHeight - 8) top = Math.max(8, clientY - 150);
+          if (top + tooltipHeight > window.innerHeight - edgeGap) top = Math.max(edgeGap, window.innerHeight - tooltipHeight - edgeGap);
           tooltip.style.setProperty('transform', 'none', 'important');
         }
         tooltip.style.setProperty('position', 'fixed', 'important');
@@ -468,6 +476,10 @@
         if (matrixTooltipState.hide && matrixTooltipState.trigger !== trigger) matrixTooltipState.hide();
         matrixTooltipState.trigger = trigger;
         matrixTooltipState.hide = hideTooltip;
+        matrixTooltipState.reposition = function() {
+          var rect = trigger.getBoundingClientRect();
+          placeTooltip(rect.right, rect.top + (rect.height / 2));
+        };
         moveTooltipToTopLayer();
         var rect = trigger.getBoundingClientRect();
         placeTooltip(rect.right, rect.top + (rect.height / 2));
@@ -490,7 +502,14 @@
         if (!hovered || !activeTrigger.contains(hovered)) matrixTooltipState.hide();
       }, true);
       window.addEventListener('scroll', function() {
-        if (matrixTooltipState.hide) matrixTooltipState.hide();
+        var activeTrigger = matrixTooltipState.trigger;
+        if (!activeTrigger || !matrixTooltipState.hide) return;
+        var rect = activeTrigger.getBoundingClientRect();
+        if (rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth) {
+          matrixTooltipState.hide();
+          return;
+        }
+        if (matrixTooltipState.reposition) matrixTooltipState.reposition();
       }, true);
       window.addEventListener('resize', function() {
         if (matrixTooltipState.hide) matrixTooltipState.hide();
@@ -498,30 +517,24 @@
     }
     var matrix = container.querySelector('.matrix-scroller');
     var matrixBar = container.querySelector('.matrix-bottom-scroll');
-    var matrixBarInner = matrixBar && matrixBar.firstElementChild;
-    if (matrix && matrixBar && matrixBarInner) {
-      function updateMatrixScrollbar() {
-        var hasHorizontalOverflow = matrix.scrollWidth > matrix.clientWidth + 1;
-        matrixBar.style.display = hasHorizontalOverflow ? 'block' : 'none';
-        matrixBarInner.style.width = matrix.scrollWidth + 'px';
-      }
-      updateMatrixScrollbar();
-      matrixBar.addEventListener('scroll', function() { matrix.scrollLeft = matrixBar.scrollLeft; });
-      matrix.addEventListener('scroll', function() { matrixBar.scrollLeft = matrix.scrollLeft; });
+    // The matrix has one native scroll container. A previous implementation
+    // synchronized a second, hidden scrollbar with it, which caused competing
+    // scroll updates and visible jitter during vertical/horizontal scrolling.
+    if (matrix && matrixBar) {
+      matrixBar.style.display = 'none';
+    }
+    if (matrix) {
+      var pageScroller = document.querySelector('.content-scroll-area');
       matrix.addEventListener('wheel', function(event) {
-        if (event.shiftKey) {
+        if (!pageScroller || Math.abs(event.deltaY) < 0.5) return;
+        var atTop = matrix.scrollTop <= 0;
+        var atBottom = matrix.scrollTop + matrix.clientHeight >= matrix.scrollHeight - 1;
+        var leavingMatrix = (atTop && event.deltaY < 0) || (atBottom && event.deltaY > 0);
+        if (leavingMatrix) {
+          pageScroller.scrollTop += event.deltaY;
           event.preventDefault();
-          matrix.scrollLeft += event.deltaY || event.deltaX;
         }
-      }, { passive:false });
-      matrixBar.addEventListener('wheel', function(event) {
-        if (event.shiftKey) {
-          event.preventDefault();
-          matrixBar.scrollLeft += event.deltaY || event.deltaX;
-        }
-      }, { passive:false });
-      window.addEventListener('resize', updateMatrixScrollbar);
-      if (window.ResizeObserver) new ResizeObserver(updateMatrixScrollbar).observe(matrix);
+      }, { passive: false });
     }
   }
 

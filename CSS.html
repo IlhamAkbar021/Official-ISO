@@ -32,10 +32,10 @@
   }
   .app-brand { padding: 1.5rem 1.25rem; border-bottom: 1px solid #253047; display: flex; flex-direction: row; align-items:center; gap: 0.8rem; }
   .brand-mark { width:38px; height:38px; border-radius:12px; display:grid; place-items:center; color:#fff; font-weight:800; background:linear-gradient(145deg,#6366f1,#22d3ee); box-shadow:0 8px 24px rgba(79,70,229,.35); flex:0 0 auto; }
-  .brand-copy { min-width:0; }
-  .brand-chip { color: #94a3b8; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; margin-bottom: 0.15rem; }
-  .app-brand h1 { margin: 0; font-size: 1rem; font-weight: 800; color: #f8fafc; letter-spacing: -0.02em; }
-  .brand-environment { color:#64748b; font-size:.6rem; margin-top:.35rem; display:flex; align-items:center; gap:.3rem; }
+  .brand-copy { min-width:0; display:flex; flex-wrap:wrap; align-items:baseline; column-gap:.42rem; row-gap:.08rem; }
+  .brand-chip { color: #94a3b8; font-size: 0.48rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; margin:0; white-space:nowrap; }
+  .app-brand h1 { margin: 0; font-size: .82rem; font-weight: 800; color: #f8fafc; letter-spacing: -0.02em; white-space:nowrap; }
+  .brand-environment { flex-basis:100%; color:#64748b; font-size:.6rem; margin-top:.18rem; display:flex; align-items:center; gap:.3rem; }
   .brand-environment span { width:6px; height:6px; border-radius:50%; background:#34d399; box-shadow:0 0 0 3px rgba(52,211,153,.12); }
 
   .nav-menu { padding: 1rem 0 .75rem; display: flex; flex-direction: column; gap: 0.15rem; flex: 1 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; scrollbar-gutter:stable; }
@@ -1500,6 +1500,7 @@
     max-height:min(62vh, 620px) !important;
     overflow-x:auto !important;
     overflow-y:auto !important;
+    overscroll-behavior-y:auto !important;
     scrollbar-width:thin;
     scrollbar-color:#93c5fd #eff6ff;
   }
@@ -1532,4 +1533,22 @@
   }
   .top-header .search-box { border-color:#bfdbfe; background:#fff; }
   .top-header .search-box:focus { border-color:#2563eb; box-shadow:0 0 0 3px rgba(37,99,235,.1); }
+
+  /* LiDAR tables scroll as one sheet: Robot ID moves with Date, software
+     version, tester, measurements, and actions instead of staying frozen. */
+  .lidar-panel .lidar-table th:first-child,
+  .lidar-panel .lidar-table td:first-child {
+    left:auto !important;
+    inset-inline-start:auto !important;
+    box-shadow:none !important;
+  }
+  .lidar-panel .lidar-table th:first-child {
+    position:sticky !important;
+    top:0 !important;
+    z-index:3 !important;
+  }
+  .lidar-panel .lidar-table td:first-child {
+    position:static !important;
+    z-index:auto !important;
+  }
 </style>

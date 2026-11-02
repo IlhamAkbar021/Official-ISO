@@ -1,0 +1,22 @@
+<script>
+  /**
+   * Browser metadata for every non-specialized ISO module.
+   * Keep module identity here; keep shared rendering/actions in App_JS.html.
+   */
+  var MODULE_UI_REGISTRY = [
+    { group: 'Static ISO', key: 'lidar', title: 'LiDAR', method: 'getLidarData', renderer: 'renderSplitLidarTable' },
+    { group: 'Static ISO', key: 'headdepth', title: 'Head Depth Camera', method: 'getHeadDepthData', renderer: 'renderSmartModule' },
+    { group: 'Static ISO', key: 'basedepth', title: STATIC_MODULE_UI.basedepth.title, method: STATIC_MODULE_UI.basedepth.method, renderer: STATIC_MODULE_UI.basedepth.renderer },
+    { group: 'Static ISO', key: 'cliff', title: STATIC_MODULE_UI.cliff.title, method: STATIC_MODULE_UI.cliff.method, renderer: STATIC_MODULE_UI.cliff.renderer },
+    { group: 'Static ISO', key: 'wifi', title: 'Wi-Fi', method: 'getWifiData', renderer: 'renderTable' },
+    { group: 'Dynamic ISO', key: 'ratedspeed', title: DYNAMIC_MODULE_UI.ratedspeed.title, method: DYNAMIC_MODULE_UI.ratedspeed.method, renderer: DYNAMIC_MODULE_UI.ratedspeed.renderer },
+    { group: 'Dynamic ISO', key: 'estop', title: DYNAMIC_MODULE_UI.estop.title, method: DYNAMIC_MODULE_UI.estop.method, renderer: DYNAMIC_MODULE_UI.estop.renderer },
+    { group: 'Dynamic ISO', key: 'turningwidth', title: DYNAMIC_MODULE_UI.turningwidth.title, method: DYNAMIC_MODULE_UI.turningwidth.method, renderer: DYNAMIC_MODULE_UI.turningwidth.renderer },
+    { group: 'Dynamic ISO', key: 'clifflowerspeed', title: DYNAMIC_MODULE_UI.clifflowerspeed.title, method: DYNAMIC_MODULE_UI.clifflowerspeed.method, renderer: DYNAMIC_MODULE_UI.clifflowerspeed.renderer },
+    { group: 'Dynamic ISO', key: 'traversegap', title: DYNAMIC_MODULE_UI.traversegap.title, method: DYNAMIC_MODULE_UI.traversegap.method, renderer: DYNAMIC_MODULE_UI.traversegap.renderer },
+    { group: 'Dynamic ISO', key: 'narrow', title: DYNAMIC_MODULE_UI.narrow.title, method: DYNAMIC_MODULE_UI.narrow.method, renderer: DYNAMIC_MODULE_UI.narrow.renderer },
+    { group: 'Dynamic ISO', key: 'apriltag', title: DYNAMIC_MODULE_UI.apriltag.title, method: DYNAMIC_MODULE_UI.apriltag.method, renderer: DYNAMIC_MODULE_UI.apriltag.renderer },
+    { group: 'Accuracy & Repeatability', key: 'accuracylaser', title: 'Laser Detection', method: 'getModuleData', renderer: 'renderSmartModule' },
+    { group: 'Accuracy & Repeatability', key: 'accuracyapriltag', title: 'AprilTag Detection', method: 'getModuleData', renderer: 'renderSmartModule' }
+  ];
+</script>
