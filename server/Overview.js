@@ -156,6 +156,13 @@ function getOverviewData() {
   }
 }
 
+/** Return the canonical robot list used by every ISO input form. */
+function getOverviewRobotNames() {
+  var overview = getOverviewData();
+  if (!overview || !overview.success) return { success: false, error: overview && overview.error ? overview.error : 'Overview data unavailable.' };
+  return { success: true, names: (overview.robots || []).map(function(robot) { return robot.name; }).filter(Boolean) };
+}
+
 // BATCH UPDATER: Direct in-cell edits written simultaneously to Google Sheets
 function batchUpdateOverview(updates) {
   try {

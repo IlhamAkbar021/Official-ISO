@@ -152,6 +152,7 @@
     currentTab = tabId;
     var pageScroller = document.querySelector('.content-scroll-area');
     if (pageScroller) pageScroller.classList.toggle('lidar-table-only-scroll', tabId === 'lidar');
+    if (pageScroller) pageScroller.classList.toggle('overview-no-global-scroll', tabId === 'overview');
     
     document.querySelectorAll('.nav-item').forEach(function(btn) { btn.classList.remove('active'); });
     var activeBtn = document.getElementById('nav-' + tabId);
@@ -1412,7 +1413,7 @@
 
     var html = '';
 
-    html += '<div class="panel-card lidar-panel"><div class="panel-header"><h2>LiDAR Data Collection</h2></div><div class="lidar-sections">';
+    html += '<div class="panel-card lidar-panel"><div class="lidar-sections">';
 
     if (activeLidarSubTab === 'all' || activeLidarSubTab === 'accuracy') {
       var groupedAccuracy = groupLidarAccuracyPivoted(response.accuracy.rows);
@@ -1650,6 +1651,14 @@
       if (value) values[value] = true;
     });
     var testerColumn = rawModuleResponse.roles && rawModuleResponse.roles.tester >= 0 ? rawModuleResponse.roles.tester : -1;
+    var robotColumn = rawModuleResponse.roles && rawModuleResponse.roles.robot >= 0 ? rawModuleResponse.roles.robot : 0;
+    if (columnIndex === robotColumn) {
+      try {
+        JSON.parse(localStorage.getItem('registered_robot_names') || '[]').forEach(function(name) {
+          if (name) values[String(name).trim()] = true;
+        });
+      } catch (e) { /* use sheet values when cache is unavailable */ }
+    }
     if (columnIndex === testerColumn) {
       getRegisteredTesterNames().forEach(function(name) { values[name] = true; });
     }
@@ -1807,11 +1816,23 @@
 
   function hydrateRegisteredRobotList() {
     var list = document.getElementById('registeredRobotList');
-    if (!list || list.options.length) return;
+    if (!list) return;
+    if (list.options.length) return;
     try {
       var names = JSON.parse(localStorage.getItem('registered_robot_names') || '[]');
       list.innerHTML = names.map(function(name) { return '<option value="' + escapeHtml(name) + '"></option>'; }).join('');
     } catch (e) { /* optional */ }
+    if (!list.options.length) loadRegisteredRobotNames();
+  }
+
+  function loadRegisteredRobotNames(onComplete) {
+    google.script.run.withSuccessHandler(function(response) {
+      var names = response && response.success && Array.isArray(response.names) ? response.names : [];
+      updateRegisteredRobotList(names.map(function(name) { return { name: name }; }));
+      if (onComplete) onComplete(names);
+    }).withFailureHandler(function() {
+      if (onComplete) onComplete([]);
+    }).getOverviewRobotNames();
   }
 
   function submitGenericModuleForm() {
@@ -1961,6 +1982,7 @@
   window.onload = function() {
     applyLanguage();
     loadRegisteredTesterNames();
+    loadRegisteredRobotNames();
     toggleSidebarRail(localStorage.getItem('iso_sidebar_rail') === '1');
     collapseAllNavGroups();
     var lastTab = localStorage.getItem('last_iso_tab');

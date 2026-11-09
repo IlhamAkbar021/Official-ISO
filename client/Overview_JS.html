@@ -15,6 +15,11 @@
   var activeDvtFilter = 'all'; 
   var activeAuditRobotName = '';
   var isAuditMetaEditing = false;
+  var overviewSummaryCollapsed = false;
+  var overviewMatrixCollapsed = false;
+  var overviewMatrixExpanded = false;
+  var overviewMatrixDensity = 'standard';
+  var overviewView = 'statistics';
   document.addEventListener('keydown', function(event) {
     if (event.key === 'Escape') {
       var modal = document.getElementById('robotDetailModal');
@@ -25,6 +30,62 @@
   function setDvtFilter(filterKey) {
     activeDvtFilter = filterKey;
     if (rawOverviewResponse) renderOverview(rawOverviewResponse, rawHeadDepthResponse);
+  }
+
+  function setOverviewView(view) {
+    if (['statistics', 'matrix', 'iso-status'].indexOf(view) < 0) return;
+    overviewView = view;
+    var root = document.querySelector('.overview-layout');
+    if (!root) return;
+    root.dataset.activeView = view;
+    root.querySelectorAll('[data-overview-view]').forEach(function(button) {
+      var active = button.dataset.overviewView === view;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+  }
+
+  function toggleOverviewSummary() {
+    overviewSummaryCollapsed = !overviewSummaryCollapsed;
+    var summary = document.querySelector('.overview-summary');
+    var button = document.getElementById('overviewSummaryToggle');
+    if (summary) summary.classList.toggle('is-collapsed', overviewSummaryCollapsed);
+    if (button) {
+      button.textContent = overviewSummaryCollapsed ? 'Show insights' : 'Hide insights';
+      button.setAttribute('aria-expanded', String(!overviewSummaryCollapsed));
+    }
+  }
+
+  function setOverviewMatrixDensity(density) {
+    if (['comfortable', 'standard', 'compact'].indexOf(density) < 0) return;
+    overviewMatrixDensity = density;
+    var scroller = document.querySelector('.matrix-scroller');
+    if (scroller) {
+      scroller.classList.remove('density-comfortable', 'density-standard', 'density-compact');
+      scroller.classList.add('density-' + density);
+    }
+  }
+
+  function toggleOverviewMatrix() {
+    overviewMatrixCollapsed = !overviewMatrixCollapsed;
+    var card = document.querySelector('.overview-matrix-card');
+    var button = document.getElementById('matrixCollapseToggle');
+    if (card) card.classList.toggle('is-collapsed', overviewMatrixCollapsed);
+    if (button) {
+      button.textContent = overviewMatrixCollapsed ? 'Show matrix' : 'Hide matrix';
+      button.setAttribute('aria-expanded', String(!overviewMatrixCollapsed));
+    }
+  }
+
+  function toggleOverviewMatrixSize() {
+    overviewMatrixExpanded = !overviewMatrixExpanded;
+    var card = document.querySelector('.overview-matrix-card');
+    var button = document.getElementById('matrixExpandToggle');
+    if (card) card.classList.toggle('is-expanded', overviewMatrixExpanded);
+    if (button) {
+      button.textContent = overviewMatrixExpanded ? 'Restore size' : 'Expand matrix';
+      button.setAttribute('aria-pressed', String(overviewMatrixExpanded));
+    }
   }
 
   function openAddRobotModal() {
@@ -199,6 +260,8 @@
 
   function renderOverview(response, headDepthResponse) {
     rawOverviewResponse = response;
+    var pageScroller = document.querySelector('.content-scroll-area');
+    if (pageScroller) pageScroller.classList.add('overview-no-global-scroll');
     if (headDepthResponse) rawHeadDepthResponse = headDepthResponse;
     var container = document.getElementById('tableContainer');
     if (!response || !response.success) {
@@ -215,7 +278,14 @@
       return cohortMatch && ('dvt' + cohortMatch[1]) === activeDvtFilter;
     });
 
-    var totalUnits = filteredRobots.length;
+    // A robot is "tested" only after at least one real result exists. An
+    // initialized Overview column with all blank values is not test activity.
+    var totalUnits = filteredRobots.filter(function(robot) {
+      return response.tests.some(function(test) {
+        var value = String(test.results[robot.name] || '').trim().toLowerCase();
+        return value && value !== '-' && value !== 'n/a' && value !== 'na';
+      });
+    }).length;
     var totalSuites = response.tests.length;
     var cohortPass = 0, cohortStatus = 0, warnCount = 0;
     var selectedCohortLabel = activeDvtFilter === 'all' ? 'All DVT' : getDvtCohortLabel(activeDvtFilter);
@@ -228,13 +298,56 @@
     });
 
     var avgPass = cohortStatus > 0 ? (cohortPass / cohortStatus * 100).toFixed(1) : '—';
+    var overviewCounts = { pass:0, fail:0, attention:0, data:0, remaining:0 };
+    response.tests.forEach(function(test) {
+      filteredRobots.forEach(function(robot) {
+        var state = getOverviewResultState(test.results[robot.name]);
+        if (overviewCounts[state] !== undefined) overviewCounts[state]++;
+      });
+    });
+    var overviewTotal = Math.max(1, filteredRobots.length * response.tests.length);
+    var completionRate = ((overviewTotal - overviewCounts.remaining) / overviewTotal * 100).toFixed(1);
+    var passShare = (overviewCounts.pass / overviewTotal * 100).toFixed(1);
+    var failShare = (overviewCounts.fail / overviewTotal * 100).toFixed(1);
+    var attentionShare = ((overviewCounts.attention + overviewCounts.data) / overviewTotal * 100).toFixed(1);
+    var warningAttention = overviewCounts.attention;
+    var measuredAttention = overviewCounts.data;
+    var totalAttention = warningAttention + measuredAttention;
+    var areaCompletion = function(match) {
+      var areaTests = response.tests.filter(function(test) { return getOverviewTestGroup(test).phase.toLowerCase().indexOf(match) !== -1; });
+      var areaTotal = Math.max(1, areaTests.length * filteredRobots.length), areaDone = 0;
+      areaTests.forEach(function(test) { filteredRobots.forEach(function(robot) { if (getOverviewResultState(test.results[robot.name]) !== 'not-performed') areaDone++; }); });
+      return (areaDone / areaTotal * 100).toFixed(1);
+    };
+    var staticCoverage = areaCompletion('static iso');
+    var dynamicCoverage = areaCompletion('dynamic iso');
+    var accuracyCoverage = areaCompletion('accuracy');
+    var passFailTotal = Math.max(1, overviewCounts.pass + overviewCounts.fail);
+    var passRateForDonut = (overviewCounts.pass / passFailTotal * 100).toFixed(1);
+    var attentionBreakdown = { warning:0, measured:0, partial:0, progress:0 };
+    response.tests.forEach(function(test) {
+      filteredRobots.forEach(function(robot) {
+        var value = String(test.results[robot.name] || '').toLowerCase();
+        if (getOverviewResultState(value) === 'attention') {
+          if (/partial/.test(value)) attentionBreakdown.partial++;
+          else if (/progress|pending|wait/.test(value)) attentionBreakdown.progress++;
+          else attentionBreakdown.warning++;
+        } else if (getOverviewResultState(value) === 'data') attentionBreakdown.measured++;
+      });
+    });
 
     // Start 2-Column Split Layout
-    var html = '<div class="overview-layout">';
+    var html = '<div class="overview-layout" data-active-view="' + overviewView + '">' +
+      '<nav class="overview-view-switch" aria-label="Overview sections">' +
+      '<button type="button" class="' + (overviewView === 'statistics' ? 'active' : '') + '" data-overview-view="statistics" aria-pressed="' + (overviewView === 'statistics') + '" onclick="setOverviewView(\'statistics\')"><span>◉</span> Statistics</button>' +
+      '<button type="button" class="' + (overviewView === 'matrix' ? 'active' : '') + '" data-overview-view="matrix" aria-pressed="' + (overviewView === 'matrix') + '" onclick="setOverviewView(\'matrix\')"><span>▦</span> Test Execution Matrix</button>' +
+      '<button type="button" class="' + (overviewView === 'iso-status' ? 'active' : '') + '" data-overview-view="iso-status" aria-pressed="' + (overviewView === 'iso-status') + '" onclick="setOverviewView(\'iso-status\')"><span>◷</span> ISO Status</button>' +
+      '</nav><section class="overview-view-panel" data-overview-panel="statistics">';
 
     // LEFT COLUMN (Main Matrix & KPIs)
     html += '<div class="overview-main">';
     
+    html += '<div class="overview-summary' + (overviewSummaryCollapsed ? ' is-collapsed' : '') + '"><div class="overview-summary-inner">';
     // KPIs
     html += '<div class="telemetry-strip">' +
       '<div class="telemetry-card"><div class="telemetry-label">' + t('units_tested') + '</div><div class="telemetry-value">' + totalUnits + '</div></div>' +
@@ -242,6 +355,12 @@
       '<div class="telemetry-card"><div class="telemetry-label">' + t('suite_runs') + '</div><div class="telemetry-value">' + totalSuites + '</div></div>' +
       '<div class="telemetry-card"><div class="telemetry-label">' + t('warn_count') + '</div><div class="telemetry-value" style="color:#b45309;">' + warnCount + '</div></div>' +
     '</div>';
+    html += '<section class="overview-chart-grid" aria-label="Production performance charts">' +
+      '<details class="overview-chart-card" open><summary class="overview-chart-title"><strong>Pass / fail</strong><span>' + (overviewCounts.pass + overviewCounts.fail) + ' final results</span></summary><div class="overview-chart-content"><div class="overview-donut-row"><div class="overview-pass-donut" style="--pass-rate:' + passRateForDonut + '%"><div><strong>' + passRateForDonut + '%</strong><small>PASS</small></div></div><div class="overview-chart-legend"><span><i class="legend-pass"></i><b>' + overviewCounts.pass + '</b> passed</span><span><i class="legend-fail"></i><b>' + overviewCounts.fail + '</b> failed</span></div></div></div></details>' +
+      '<details class="overview-chart-card" open><summary class="overview-chart-title"><strong>Needs review</strong><span>' + totalAttention + ' items</span></summary><div class="overview-chart-content"><div class="overview-review-total">' + totalAttention + '<small>items to review</small></div><div class="overview-review-bars"><div><span>Warnings</span><i><b style="width:' + (totalAttention ? attentionBreakdown.warning / totalAttention * 100 : 0) + '%"></b></i><em>' + attentionBreakdown.warning + '</em></div><div><span>Partial</span><i><b class="partial" style="width:' + (totalAttention ? attentionBreakdown.partial / totalAttention * 100 : 0) + '%"></b></i><em>' + attentionBreakdown.partial + '</em></div><div><span>In progress</span><i><b class="progress" style="width:' + (totalAttention ? attentionBreakdown.progress / totalAttention * 100 : 0) + '%"></b></i><em>' + attentionBreakdown.progress + '</em></div><div><span>Measured</span><i><b class="measured" style="width:' + (totalAttention ? attentionBreakdown.measured / totalAttention * 100 : 0) + '%"></b></i><em>' + attentionBreakdown.measured + '</em></div></div></div></details>' +
+      '<details class="overview-chart-card" open><summary class="overview-chart-title"><strong>Test coverage by ISO area</strong><span>' + totalSuites + ' suites</span></summary><div class="overview-chart-content"><div class="overview-review-bars overview-coverage-bars"><div><span>Static ISO</span><i><b style="width:' + staticCoverage + '%"></b></i><em>' + staticCoverage + '%</em></div><div><span>Dynamic ISO</span><i><b style="width:' + dynamicCoverage + '%"></b></i><em>' + dynamicCoverage + '%</em></div><div><span>Accuracy &amp; Repeatability</span><i><b style="width:' + accuracyCoverage + '%"></b></i><em>' + accuracyCoverage + '%</em></div></div></div></details>' +
+      '</section>';
+    html += '</div></div>';
 
     // Matrix
     var matrixTitle = getMatrixTitle();
@@ -257,7 +376,7 @@
     filteredRobots.forEach(function() { matrixColumns += '<col class="matrix-robot-col">'; });
     matrixColumns += '</colgroup>';
 
-    html += '<div class="panel-card" style="margin-bottom:0;"><div class="panel-header">' +
+    html += '</div></section><section class="overview-view-panel" data-overview-panel="matrix"><div class="panel-card overview-matrix-card' + (overviewMatrixCollapsed ? ' is-collapsed' : '') + (overviewMatrixExpanded ? ' is-expanded' : '') + '" style="margin-bottom:0;"><div class="panel-header">' +
       '<div style="display:flex; align-items:center; gap:1rem; flex-wrap:wrap;">' +
         '<h2 id="matrixTitleText">' + matrixTitle + '</h2>' +
         '<div class="dvt-cohort-selector">' +
@@ -265,6 +384,8 @@
         '</div>' +
       '</div>' +
       '<div style="display:flex; align-items:center; gap:0.5rem;">' +
+        '<button type="button" class="btn-ctrl" id="matrixExpandToggle" aria-pressed="' + overviewMatrixExpanded + '" onclick="toggleOverviewMatrixSize()">' + (overviewMatrixExpanded ? 'Restore size' : 'Expand matrix') + '</button>' +
+        '<label class="matrix-density-control" for="matrixDensitySelect"><span>Density</span><select id="matrixDensitySelect" aria-label="Table density" onchange="setOverviewMatrixDensity(this.value)"><option value="comfortable"' + (overviewMatrixDensity === 'comfortable' ? ' selected' : '') + '>Comfortable</option><option value="standard"' + (overviewMatrixDensity === 'standard' ? ' selected' : '') + '>Standard</option><option value="compact"' + (overviewMatrixDensity === 'compact' ? ' selected' : '') + '>Compact</option></select></label>' +
         '<button class="btn-ctrl" onclick="openAddRobotModal()">+ Add Robot</button>' +
         (isMatrixEditMode
           ? '<button class="btn-action success" onclick="saveMatrixInlineEdits()">💾 Save (' + dirtyTotal + ')</button>' +
@@ -272,7 +393,7 @@
           : '<button class="btn-ctrl primary" onclick="toggleMatrixInlineEdit()">Edit Matrix</button>'
         ) +
       '</div>' +
-    '</div><div class="table-scroller matrix-scroller"><table class="overview-matrix-table">' + matrixColumns + '<thead><tr>' +
+    '</div><div class="table-scroller matrix-scroller density-' + overviewMatrixDensity + '"><table class="overview-matrix-table">' + matrixColumns + '<thead><tr>' +
       '<th style="min-width:180px;">' + t('test_category') + '</th>' +
       '<th class="col-compact-th">' + t('notes') + '</th>' +
       '<th class="col-compact-th">' + t('pass_rate') + '</th>' +
@@ -375,11 +496,12 @@
     }
 
     html += '</tbody></table></div><div class="matrix-bottom-scroll" aria-label="Scroll execution matrix horizontally"><div></div></div></div>';
-    html += '</div>'; // End Left Column
+    html += '</section>'; // End matrix view
 
     // RIGHT COLUMN (Sidebar Fleet Panel)
-    html += '<div class="overview-sidebar">' +
+    html += '<section class="overview-view-panel" data-overview-panel="iso-status"><div class="overview-sidebar">' +
       '<div class="fleet-panel-header"><div><h3>ISO Test Status</h3><p>Completion progress by robot</p></div></div>' +
+      '<div class="fleet-status-head"><span>Robot ID</span><span>SW release</span><span>Temperature</span><span>Humidity</span><span>Progress</span><span>ISO Status</span></div>' +
       '<div class="fleet-panel-list">';
     
     filteredRobots.forEach(function(r) {
@@ -397,27 +519,32 @@
         else if (state === 'data') robotSummary.data++;
         else if (state === 'not-performed') robotSummary.remaining++;
       });
+      // Keep unperformed initialized robots out of the status cards. They are
+      // still available as Overview matrix columns and form suggestions.
+      if (robotSummary.pass + robotSummary.fail + robotSummary.attention + robotSummary.data === 0) return;
       var readinessDone = robotSummary.remaining === 0;
       var readinessLabel = readinessDone ? 'ISO Test Done' : 'ISO Test In Progress';
+      var readinessShortLabel = readinessDone ? 'DONE' : 'IN-PROGRESS';
       var readinessClass = readinessDone ? 'pass' : 'info';
       
       // ✨ FIX: Safely encode the robot name to prevent invalid token errors on click ✨
       var safeBotId = encodeURIComponent(r.name).replace(/'/g, "%27");
 
-      html += '<div class="fleet-side-card" onclick="openRobotDetailModal(decodeURIComponent(\'' + safeBotId + '\'))">' +
+      html += '<div class="fleet-side-card ' + (readinessDone ? 'status-done' : '') + '" onclick="openRobotDetailModal(decodeURIComponent(\'' + safeBotId + '\'))">' +
         '<div class="fsc-top">' +
           '<span class="fsc-id">' + botName + '</span>' +
           '<span class="status-chip ' + readinessClass + '" style="font-size:0.6rem;">' + readinessLabel + '</span>' +
         '</div>' +
-        '<div class="fsc-row"><span class="fsc-lbl">' + t('sw_release') + '</span><span class="fsc-val">' + sw + '</span></div>' +
-        '<div class="fsc-row"><span class="fsc-lbl">Temperature</span><span class="fsc-val">' + temp + '</span></div>' +
-        '<div class="fsc-row"><span class="fsc-lbl">Humidity</span><span class="fsc-val">' + humidity + '</span></div>' +
+        '<div class="fsc-row"><span class="fsc-lbl">' + t('sw_release') + '</span><span class="fsc-val">' + escapeHtml(sw) + '</span></div>' +
+        '<div class="fsc-row"><span class="fsc-lbl">Temperature</span><span class="fsc-val">' + escapeHtml(temp) + '</span></div>' +
+        '<div class="fsc-row"><span class="fsc-lbl">Humidity</span><span class="fsc-val">' + escapeHtml(humidity) + '</span></div>' +
         '<div class="fleet-readiness-bar"><span class="pass" style="width:' + (robotSummary.pass / Math.max(1, response.tests.length) * 100) + '%"></span><span class="fail" style="width:' + (robotSummary.fail / Math.max(1, response.tests.length) * 100) + '%"></span><span class="attention" style="width:' + (robotSummary.attention / Math.max(1, response.tests.length) * 100) + '%"></span><span class="data" style="width:' + (robotSummary.data / Math.max(1, response.tests.length) * 100) + '%"></span></div>' +
-        '<div class="fleet-readiness-counts"><span>' + robotSummary.pass + ' passed</span><span>' + (robotSummary.data ? robotSummary.data + ' measured · ' : '') + robotSummary.remaining + ' remaining</span></div>' +
+        '<div class="fsc-row fsc-status-row"><span class="fsc-lbl">ISO status</span><span class="fsc-val ' + readinessClass + '">' + readinessShortLabel + '</span></div>' +
+        '<div class="fleet-readiness-counts"><button type="button" class="fleet-detail-link pass" onclick="event.stopPropagation(); openRobotDetailModal(decodeURIComponent(\'' + safeBotId + '\'), \'done\')">' + (robotSummary.pass + robotSummary.fail + robotSummary.attention + robotSummary.data) + ' done</button><button type="button" class="fleet-detail-link remaining" onclick="event.stopPropagation(); openRobotDetailModal(decodeURIComponent(\'' + safeBotId + '\'), \'remaining\')">' + robotSummary.remaining + ' remaining</button></div>' +
       '</div>';
     });
     
-    html += '</div></div></div>'; // End Right Column & Layout Wrapper
+    html += '</div></div></section></div>'; // End ISO status view and Overview wrapper
     container.innerHTML = html;
     var matrixTooltipState = window.__matrixTooltipState || (window.__matrixTooltipState = { trigger: null, hide: null, reposition: null, guardAttached: false });
     container.querySelectorAll('.overview-matrix-table .info-tooltip').forEach(function(trigger) {
@@ -499,7 +626,7 @@
         var activeTrigger = matrixTooltipState.trigger;
         if (!activeTrigger || !matrixTooltipState.hide) return;
         var hovered = document.elementFromPoint(event.clientX, event.clientY);
-        if (!hovered || !activeTrigger.contains(hovered)) matrixTooltipState.hide();
+        if (!hovered || (!activeTrigger.contains(hovered) && !hovered.closest('.matrix-floating-tooltip'))) matrixTooltipState.hide();
       }, true);
       window.addEventListener('scroll', function() {
         var activeTrigger = matrixTooltipState.trigger;
@@ -522,19 +649,6 @@
     // scroll updates and visible jitter during vertical/horizontal scrolling.
     if (matrix && matrixBar) {
       matrixBar.style.display = 'none';
-    }
-    if (matrix) {
-      var pageScroller = document.querySelector('.content-scroll-area');
-      matrix.addEventListener('wheel', function(event) {
-        if (!pageScroller || Math.abs(event.deltaY) < 0.5) return;
-        var atTop = matrix.scrollTop <= 0;
-        var atBottom = matrix.scrollTop + matrix.clientHeight >= matrix.scrollHeight - 1;
-        var leavingMatrix = (atTop && event.deltaY < 0) || (atBottom && event.deltaY > 0);
-        if (leavingMatrix) {
-          pageScroller.scrollTop += event.deltaY;
-          event.preventDefault();
-        }
-      }, { passive: false });
     }
   }
 
@@ -666,7 +780,7 @@
       .batchUpdateOverview(updates);
   }
 
-  function openRobotDetailModal(robotName) {
+  function openRobotDetailModal(robotName, filter) {
     if (!rawOverviewResponse) return;
     activeAuditRobotName = robotName;
     isAuditMetaEditing = false;
@@ -728,6 +842,8 @@
         lastChecklistPhase = section.group.phase;
       }
       section.tests.forEach(function(item) {
+        if (filter === 'done' && item.state === 'not-performed') return;
+        if (filter === 'remaining' && item.state !== 'not-performed') return;
         var label = item.test.item || item.test.purpose || 'Unnamed test';
         var detail = item.test.purpose && item.test.purpose !== item.test.item ? item.test.purpose : '';
         var statusLabel = getChecklistStatusLabel(item.value, item.state);
