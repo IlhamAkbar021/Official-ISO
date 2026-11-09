@@ -415,7 +415,6 @@
       var rowStats = getCohortRowStats(tRow, filteredRobots);
       cohortPass += rowStats.pass;
       cohortStatus += rowStats.statusTotal;
-      data = 0
     });
 
     var avgPass = cohortStatus > 0 ? (cohortPass / cohortStatus * 100).toFixed(1) : '—';
