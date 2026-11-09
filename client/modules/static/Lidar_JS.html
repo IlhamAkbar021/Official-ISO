@@ -149,6 +149,365 @@
     google.script.run.withSuccessHandler(handleSuccess).withFailureHandler(handleFail).addLidarRecord(payload);
   }
 
+  var lidarSmartParsedData = null;
+
+  function getLidarSmartDefaults() {
+    var now = new Date();
+    var date = now.getFullYear() + '/' + String(now.getMonth() + 1).padStart(2, '0') + '/' + String(now.getDate()).padStart(2, '0');
+    var cachedTesters = [];
+    var liveTesters = typeof registeredTesterNames !== 'undefined' && Array.isArray(registeredTesterNames) ? registeredTesterNames : [];
+    try { cachedTesters = JSON.parse(localStorage.getItem('registered_testers_cache') || '[]'); } catch (e) { cachedTesters = []; }
+    return {
+      lidarType: typeof activeLidarSubTab !== 'undefined' && activeLidarSubTab === 'tilt' ? 'tilt' : 'accuracy', robotId: '', date: date, swVer: '',
+      tester: localStorage.getItem('last_lidar_tester') || liveTesters[0] || cachedTesters[0] || '',
+      runA: { distance:'', std:'0.00', validPoints:'9' }, runB: { distance:'', std:'0.00', validPoints:'9' }, runC: { distance:'', std:'0.00', validPoints:'9' },
+      bricks:'', detectedDist:'', heightFrom:'', heightTo:'', tiltStatus:'', angleFrom:'', angleTo:'', note:''
+    };
+  }
+
+  function normalizeSmartRobotId(value) {
+    var match = String(value || '').match(/AC3110[\s_-]*DVT[\s_-]*(\d+)(?:[\s_-]+(\d+))?/i);
+    return match ? 'AC3110-DVT' + match[1] + (match[2] ? '-' + match[2] : '') : '';
+  }
+
+  function parseClipboardRow(line, delimiter) {
+    if (delimiter === '\t') return line.split('\t').map(function(cell) { return cell.trim(); });
+    var cells = [], current = '', quoted = false;
+    for (var i = 0; i < line.length; i++) {
+      var char = line.charAt(i);
+      if (char === '"' && quoted && line.charAt(i + 1) === '"') { current += '"'; i++; }
+      else if (char === '"') quoted = !quoted;
+      else if (char === ',' && !quoted) { cells.push(current.trim()); current = ''; }
+      else current += char;
+    }
+    cells.push(current.trim());
+    return cells;
+  }
+
+  function normalizeClipboardHeader(value) {
+    return String(value || '').toLowerCase().replace(/[()]/g, ' ').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function findClipboardColumn(headers, pattern) {
+    for (var i = 0; i < headers.length; i++) if (pattern.test(headers[i])) return i;
+    return -1;
+  }
+
+  function clipboardCell(row, index) { return index >= 0 && row && row[index] !== undefined ? String(row[index]).trim() : ''; }
+
+  function parseLidarTabularText(text, result) {
+    var lines = String(text || '').split(/\r?\n/).map(function(line) { return line.trim(); }).filter(Boolean);
+    if (!lines.length) return false;
+    var delimiter = lines.some(function(line) { return line.indexOf('\t') !== -1; }) ? '\t' : ',';
+    if (delimiter === ',' && lines.length === 1 && lines[0].indexOf(',') === -1) return false;
+    var rows = lines.map(function(line) { return parseClipboardRow(line, delimiter); });
+    var headers = rows[0].map(normalizeClipboardHeader);
+    var hasHeader = headers.some(function(header) { return /robot|tester|operator|distance|range|angle|brick|software|sw ver|date/.test(header); });
+    if (!hasHeader) {
+      var values = rows[0];
+      var robot = normalizeSmartRobotId(values[0]);
+      if (!robot) return false;
+      result.robotId = robot;
+      result.date = values[1] || result.date;
+      result.swVer = values[2] || result.swVer;
+      result.tester = values[3] || result.tester;
+      if (values.length >= 7) {
+        result.lidarType = 'accuracy'; result.runA.distance = values[4] || ''; result.runB.distance = values[5] || ''; result.runC.distance = values[6] || '';
+      }
+      return true;
+    }
+    var dataRows = rows.slice(1);
+    if (!dataRows.length) return false;
+    var robotIndex = findClipboardColumn(headers, /robot|unit|serial/);
+    var dateIndex = findClipboardColumn(headers, /^date$|test date/);
+    var swIndex = findClipboardColumn(headers, /software|sw ver|release/);
+    var testerIndex = findClipboardColumn(headers, /tester|operator|engineer/);
+    var optionIndex = findClipboardColumn(headers, /option|target|range/);
+    var distanceIndex = findClipboardColumn(headers, /^distance|measured distance|actual dist/);
+    var offsetIndex = findClipboardColumn(headers, /offset|std|deviation|diff/);
+    var samplesIndex = findClipboardColumn(headers, /sample|valid point|count/);
+    var fiveIndex = findClipboardColumn(headers, /(^|\s)5\s*m|a\s*5/);
+    var tenIndex = findClipboardColumn(headers, /(^|\s)10\s*m|b\s*10/);
+    var fifteenIndex = findClipboardColumn(headers, /(^|\s)15\s*m|c\s*15/);
+    var first = dataRows[0];
+    result.robotId = normalizeSmartRobotId(clipboardCell(first, robotIndex)) || result.robotId;
+    result.date = clipboardCell(first, dateIndex) || result.date;
+    result.swVer = clipboardCell(first, swIndex) || result.swVer;
+    result.tester = clipboardCell(first, testerIndex) || result.tester;
+    if (fiveIndex >= 0 || tenIndex >= 0 || fifteenIndex >= 0 || (optionIndex >= 0 && distanceIndex >= 0)) {
+      result.lidarType = 'accuracy';
+      result.runA.distance = clipboardCell(first, fiveIndex) || result.runA.distance;
+      result.runB.distance = clipboardCell(first, tenIndex) || result.runB.distance;
+      result.runC.distance = clipboardCell(first, fifteenIndex) || result.runC.distance;
+      if (optionIndex >= 0 && distanceIndex >= 0) dataRows.forEach(function(row) {
+        var option = clipboardCell(row, optionIndex).toLowerCase();
+        var distance = clipboardCell(row, distanceIndex);
+        var run = null;
+        if (/(^|\D)5\s*m|a\s*-?\s*5/.test(option)) run = result.runA;
+        else if (/(^|\D)10\s*m|b\s*-?\s*10/.test(option)) run = result.runB;
+        else if (/(^|\D)15\s*m|c\s*-?\s*15/.test(option)) run = result.runC;
+        if (run) {
+          run.distance = distance;
+          run.std = clipboardCell(row, offsetIndex) || run.std;
+          run.validPoints = clipboardCell(row, samplesIndex) || run.validPoints;
+        }
+      });
+      return true;
+    }
+    result.lidarType = 'tilt';
+    result.bricks = clipboardCell(first, findClipboardColumn(headers, /brick/));
+    result.detectedDist = clipboardCell(first, findClipboardColumn(headers, /detected distance|distance/));
+    result.heightFrom = clipboardCell(first, findClipboardColumn(headers, /height from/));
+    result.heightTo = clipboardCell(first, findClipboardColumn(headers, /height to/));
+    result.tiltStatus = clipboardCell(first, findClipboardColumn(headers, /tilt status|status/));
+    result.angleFrom = clipboardCell(first, findClipboardColumn(headers, /angle from|min angle/));
+    result.angleTo = clipboardCell(first, findClipboardColumn(headers, /angle to|max angle/));
+    result.note = clipboardCell(first, findClipboardColumn(headers, /note|link|evidence/));
+    return true;
+  }
+
+  function matchClipboardValue(text, pattern) {
+    var match = String(text || '').match(pattern);
+    return match && match[1] !== undefined ? match[1].trim() : '';
+  }
+
+  function parseLidarSequentialDump(text, result) {
+    var lines = String(text || '').replace(/\x1b\[[0-9;]*m/g, '').split(/\r?\n/).map(function(line) { return line.trim(); }).filter(Boolean);
+    var candidates = [];
+    lines.forEach(function(line) {
+      if (/robot|tester|operator|engineer|software|sw\s*ver|date|measured.*offset|target.*sample/i.test(line)) return;
+      var numericTokens = line.match(/[+-]?\d+(?:[.,]\d+)?/g) || [];
+      var plainNumber = /^\s*[\[({]?\s*[+-]?\d+(?:[.,]\d+)?\s*[\])}]?\s*$/.test(line);
+      if (plainNumber && numericTokens.length === 1) {
+        candidates.push({ measured:numericTokens[0], offset:'0.00', samples:'9' });
+      } else if (numericTokens.length >= 3 && (/\t|\s{2,}|\||\[|\]|(?:A|B|C)\s*-?\s*(?:5|10|15)\s*M?|(?:5|10|15)\s*M\s*[:=]/i.test(line) || /^[\s\d+\-.,\[\](){}]+$/.test(line))) {
+        var values = numericTokens.slice(-3);
+        candidates.push({ measured:values[0], offset:values[1], samples:values[2] });
+      }
+    });
+    if (candidates.length < 3) return false;
+    var targets = [5, 10, 15];
+    var sequence = null;
+    for (var start = 0; start <= candidates.length - 3; start++) {
+      var windowRows = candidates.slice(start, start + 3);
+      var plausible = windowRows.every(function(row, index) {
+        var measured = parseFloat(String(row.measured).replace(',', '.'));
+        return isFinite(measured) && Math.abs(measured - targets[index]) <= 2;
+      });
+      if (plausible) { sequence = windowRows; break; }
+    }
+    if (!sequence) return false;
+    var runs = [result.runA, result.runB, result.runC];
+    sequence.forEach(function(row, index) {
+      runs[index].distance = String(row.measured).replace(',', '.');
+      runs[index].std = String(row.offset).replace(',', '.');
+      runs[index].validPoints = String(Math.max(0, parseInt(row.samples, 10) || 0));
+    });
+    result.lidarType = 'accuracy';
+    return true;
+  }
+
+  function parseLidarClipboard(text) {
+    var result = getLidarSmartDefaults();
+    var source = String(text || '').trim();
+    if (!source) return result;
+    parseLidarTabularText(source, result);
+    parseLidarSequentialDump(source, result);
+    result.robotId = normalizeSmartRobotId(source) || result.robotId;
+    result.swVer = matchClipboardValue(source, /(?:sw(?:\s*version|\s*ver)?|software(?:\s*version)?)\s*[:=]\s*([^\s,;]+)/i) || result.swVer;
+    result.tester = matchClipboardValue(source, /(?:tester|operator|engineer)\s*[:=]\s*([^\n,;]+)/i) || result.tester;
+    var date = matchClipboardValue(source, /(?:date|tested\s*at)\s*[:=]\s*(20\d{2}[\/-](?:0?[1-9]|1[0-2])[\/-](?:0?[1-9]|[12]\d|3[01]))/i);
+    if (date) result.date = date.replace(/-/g, '/');
+    var d5 = matchClipboardValue(source, /(?:target\s*)?5\s*m(?:eter)?\s*[:=]\s*([+-]?\d+(?:[.,]\d+)?)/i);
+    var d10 = matchClipboardValue(source, /(?:target\s*)?10\s*m(?:eter)?\s*[:=]\s*([+-]?\d+(?:[.,]\d+)?)/i);
+    var d15 = matchClipboardValue(source, /(?:target\s*)?15\s*m(?:eter)?\s*[:=]\s*([+-]?\d+(?:[.,]\d+)?)/i);
+    if (d5 || d10 || d15) {
+      result.lidarType = 'accuracy';
+      result.runA.distance = d5.replace(',', '.') || result.runA.distance;
+      result.runB.distance = d10.replace(',', '.') || result.runB.distance;
+      result.runC.distance = d15.replace(',', '.') || result.runC.distance;
+    }
+    if (/tilt|angle|brick|height/i.test(source) && !(d5 || d10 || d15)) result.lidarType = 'tilt';
+    result.bricks = matchClipboardValue(source, /(?:bricks?|number\s*of\s*bricks?)\s*[:=]\s*(\d+)/i) || result.bricks;
+    result.detectedDist = matchClipboardValue(source, /(?:detected\s*distance|distance)\s*[:=]\s*([+-]?\d+(?:[.,]\d+)?)/i).replace(',', '.') || result.detectedDist;
+    result.heightFrom = matchClipboardValue(source, /height\s*from\s*[:=]\s*([+-]?\d+(?:[.,]\d+)?)/i).replace(',', '.') || result.heightFrom;
+    result.heightTo = matchClipboardValue(source, /height\s*to\s*[:=]\s*([+-]?\d+(?:[.,]\d+)?)/i).replace(',', '.') || result.heightTo;
+    result.tiltStatus = matchClipboardValue(source, /(?:tilt\s*status|status)\s*[:=]\s*([^\n,;]+)/i) || result.tiltStatus;
+    result.angleFrom = matchClipboardValue(source, /(?:angle\s*from|min(?:imum)?\s*angle|tilt\s*angle)\s*[:=]\s*([+-]?\d+(?:[.,]\d+)?)/i).replace(',', '.') || result.angleFrom;
+    result.angleTo = matchClipboardValue(source, /(?:angle\s*to|max(?:imum)?\s*angle)\s*[:=]\s*([+-]?\d+(?:[.,]\d+)?)/i).replace(',', '.') || result.angleTo;
+    var range = source.match(/angle\s*range\s*[:=]\s*([+-]?\d+(?:[.,]\d+)?)\s*(?:-|–|to)\s*([+-]?\d+(?:[.,]\d+)?)/i);
+    if (range) { result.angleFrom = range[1].replace(',', '.'); result.angleTo = range[2].replace(',', '.'); result.lidarType = 'tilt'; }
+    result.note = matchClipboardValue(source, /(?:note|evidence|link)\s*[:=]\s*([^\n]+)/i) || result.note;
+    return result;
+  }
+
+  function ensureLidarSmartImportModal() {
+    var modal = document.getElementById('lidarSmartImportModal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'lidarSmartImportModal';
+    modal.className = 'modal-overlay lidar-smart-import-overlay';
+    modal.onclick = function(event) { if (event.target === modal) closeLidarSmartImportModal(); };
+    modal.innerHTML = '<div class="lidar-smart-import-panel" role="dialog" aria-modal="true" aria-labelledby="lidarSmartImportTitle"><header><div><span class="eyebrow">SEQUENTIAL DATA ENTRY</span><h3 id="lidarSmartImportTitle">Add LiDAR Record</h3><p>Enter or paste the 5 m, 10 m and 15 m sequence before writing to Google Sheets.</p></div><button type="button" class="modal-close-x" onclick="closeLidarSmartImportModal()" aria-label="Close">×</button></header><label class="smart-paste-source"><span>Robot output / clipboard</span><textarea id="lidarSmartSource" rows="3" placeholder="5.02  0.00  8&#10;10.02  0.00  8&#10;15.02  0.00  8" oninput="parseLidarSmartPasteSource()" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key===\'Enter\'){event.preventDefault();commitLidarSmartImport(event);}"></textarea></label><form id="lidarSmartImportForm" onsubmit="commitLidarSmartImport(event)"><div id="lidarSmartPreview"></div><div class="lidar-smart-import-actions"><span>Enter saves · Ctrl/Cmd+Enter works from the paste box</span><button type="submit" class="btn-action" id="lidarSmartCommit">Save 3-row record</button></div></form></div>';
+    document.body.appendChild(modal);
+    return modal;
+  }
+
+  function openLidarSmartPasteModal(sourceText) {
+    var modal = ensureLidarSmartImportModal();
+    var source = document.getElementById('lidarSmartSource');
+    source.value = sourceText || '';
+    lidarSmartParsedData = parseLidarClipboard(source.value);
+    renderLidarSmartPreview();
+    modal.style.display = 'flex';
+    setTimeout(function() {
+      var focusTarget = source.value ? document.getElementById('smart_robot_id') : source;
+      if (focusTarget) { focusTarget.focus(); if (focusTarget.select) focusTarget.select(); }
+    }, 0);
+  }
+
+  function closeLidarSmartImportModal() {
+    var modal = document.getElementById('lidarSmartImportModal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  function parseLidarSmartPasteSource() {
+    lidarSmartParsedData = parseLidarClipboard(document.getElementById('lidarSmartSource').value);
+    renderLidarSmartPreview();
+  }
+
+  function smartImportInput(id, label, value, type, attrs) {
+    return '<label><span>' + label + '</span><input id="' + id + '" type="' + (type || 'text') + '" value="' + escapeHtml(value || '') + '" ' + (attrs || '') + '></label>';
+  }
+
+  function renderLidarSequenceRow(key, label, target, run) {
+    return '<tr><th scope="row"><strong>' + label + '</strong><small>Target ' + target.toFixed(1) + ' m</small></th>' +
+      '<td class="sequence-target">' + target.toFixed(1) + ' m</td>' +
+      '<td><input id="smart_' + key + 'm" type="number" step="0.01" value="' + escapeHtml(run.distance || '') + '" placeholder="' + target.toFixed(2) + '" required oninput="updateLidarSmartPreviewBadges()"><input id="smart_' + key + 'm_offset" type="hidden" value="' + escapeHtml(run.std || '0.00') + '"></td>' +
+      '<td id="smart_delta_' + key + '" class="sequence-delta">—</td>' +
+      '<td><input id="smart_' + key + 'm_samples" type="number" min="1" step="1" value="' + escapeHtml(run.validPoints || '9') + '" required></td>' +
+      '<td id="smart_status_' + key + '"><span class="smart-awaiting-value">Awaiting</span></td></tr>';
+  }
+
+  function renderLidarSmartPreview() {
+    var data = lidarSmartParsedData || getLidarSmartDefaults();
+    var html = '<div class="smart-import-type"><label><span>Record type</span><select id="smart_lidar_type" onchange="changeLidarSmartType(this.value)"><option value="accuracy"' + (data.lidarType === 'accuracy' ? ' selected' : '') + '>Accuracy Collection</option><option value="tilt"' + (data.lidarType === 'tilt' ? ' selected' : '') + '>Tilt & Angle</option></select></label><span class="smart-parser-state">Parsed automatically · editable</span></div><div class="smart-import-common">' +
+      smartImportInput('smart_robot_id','Robot ID',data.robotId,'text','required pattern="AC3110-DVT[0-9]+(-[0-9]+)?"') + smartImportInput('smart_date','Date',data.date,'text','required') + smartImportInput('smart_sw','SW Version',data.swVer) + smartImportInput('smart_tester','Tester',data.tester,'text','required list="registeredTesterList"') + '</div>';
+    if (data.lidarType === 'accuracy') {
+      html += '<div class="smart-sequence-wrap"><table class="smart-sequence-table"><thead><tr><th>Sequence</th><th>Target</th><th>Measured (m)</th><th>Delta / Diff</th><th>Samples</th><th>Auto-status</th></tr></thead><tbody>' +
+        renderLidarSequenceRow('5','A - 5M',5,data.runA) + renderLidarSequenceRow('10','B - 10M',10,data.runB) + renderLidarSequenceRow('15','C - 15M',15,data.runC) + '</tbody></table><p class="sequence-help">Tolerance: Pass when |Measured − Target| ≤ 0.05 m. Clipboard offset is preserved for the sheet STD/Offset column.</p></div>';
+    } else {
+      html += '<div class="smart-import-tilt">' + smartImportInput('smart_bricks','Bricks',data.bricks,'number') + smartImportInput('smart_detected','Detected Distance (m)',data.detectedDist,'number','step="0.01"') + smartImportInput('smart_height_from','Height From (cm)',data.heightFrom,'number','step="0.01"') + smartImportInput('smart_height_to','Height To (cm)',data.heightTo,'number','step="0.01"') + smartImportInput('smart_angle_from','Angle From (°)',data.angleFrom,'number','step="0.01" oninput="updateLidarSmartPreviewBadges()"') + smartImportInput('smart_angle_to','Angle To (°)',data.angleTo,'number','step="0.01" oninput="updateLidarSmartPreviewBadges()"') + smartImportInput('smart_tilt_status','Tilt Status',data.tiltStatus) + smartImportInput('smart_note','Note / Link',data.note) + '<div class="smart-tilt-preview"><span>Angle preview</span><strong id="smart_tilt_range">' + formatLidarAngle(data.angleFrom) + ' – ' + formatLidarAngle(data.angleTo) + '</strong></div></div>';
+    }
+    document.getElementById('lidarSmartPreview').innerHTML = html;
+    updateLidarSmartPreviewBadges();
+  }
+
+  function collectLidarSmartForm() {
+    var typeField = document.getElementById('smart_lidar_type');
+    var type = typeField ? typeField.value : 'accuracy';
+    var value = function(id) { var field = document.getElementById(id); return field ? field.value.trim() : ''; };
+    var data = getLidarSmartDefaults();
+    data.lidarType = type; data.robotId = normalizeSmartRobotId(value('smart_robot_id')) || value('smart_robot_id').toUpperCase(); data.date = value('smart_date'); data.swVer = value('smart_sw'); data.tester = value('smart_tester');
+    if (type === 'accuracy') {
+      data.runA.distance = value('smart_5m'); data.runA.std = value('smart_5m_offset') || '0.00'; data.runA.validPoints = value('smart_5m_samples');
+      data.runB.distance = value('smart_10m'); data.runB.std = value('smart_10m_offset') || '0.00'; data.runB.validPoints = value('smart_10m_samples');
+      data.runC.distance = value('smart_15m'); data.runC.std = value('smart_15m_offset') || '0.00'; data.runC.validPoints = value('smart_15m_samples');
+    } else {
+      data.bricks = value('smart_bricks'); data.detectedDist = value('smart_detected'); data.heightFrom = value('smart_height_from'); data.heightTo = value('smart_height_to'); data.angleFrom = value('smart_angle_from'); data.angleTo = value('smart_angle_to'); data.tiltStatus = value('smart_tilt_status'); data.note = value('smart_note');
+    }
+    return data;
+  }
+
+  function changeLidarSmartType(type) {
+    lidarSmartParsedData = collectLidarSmartForm();
+    lidarSmartParsedData.lidarType = type === 'tilt' ? 'tilt' : 'accuracy';
+    renderLidarSmartPreview();
+  }
+
+  function updateLidarSmartPreviewBadges() {
+    var type = document.getElementById('smart_lidar_type');
+    if (!type) return;
+    if (type.value === 'accuracy') {
+      [[5,'smart_5m','smart_delta_5','smart_status_5'],[10,'smart_10m','smart_delta_10','smart_status_10'],[15,'smart_15m','smart_delta_15','smart_status_15']].forEach(function(item) {
+        var field = document.getElementById(item[1]);
+        var deltaCell = document.getElementById(item[2]);
+        var statusCell = document.getElementById(item[3]);
+        var measured = field && field.value !== '' ? parseFloat(field.value) : NaN;
+        if (isFinite(measured)) {
+          var delta = measured - item[0];
+          var state = Math.abs(delta) <= LIDAR_ISO_TOLERANCE_M + 1e-9 ? 'pass' : 'fail';
+          if (deltaCell) { deltaCell.innerText = (delta >= 0 ? '+' : '') + delta.toFixed(2) + ' m'; deltaCell.className = 'sequence-delta state-' + state; }
+          if (statusCell) statusCell.innerHTML = '<span class="smart-tolerance-badge state-' + state + '">' + (state === 'pass' ? 'Pass' : 'Fail') + '</span>';
+        } else {
+          if (deltaCell) { deltaCell.innerText = '—'; deltaCell.className = 'sequence-delta'; }
+          if (statusCell) statusCell.innerHTML = '<span class="smart-awaiting-value">Awaiting</span>';
+        }
+      });
+    } else {
+      var from = document.getElementById('smart_angle_from');
+      var to = document.getElementById('smart_angle_to');
+      var range = document.getElementById('smart_tilt_range');
+      if (range) range.innerHTML = formatLidarAngle(from && from.value) + ' – ' + formatLidarAngle(to && to.value);
+    }
+  }
+
+  function commitLidarSmartImport(event) {
+    if (event) event.preventDefault();
+    var form = document.getElementById('lidarSmartImportForm');
+    if (form && form.reportValidity && !form.reportValidity()) return;
+    var payload = collectLidarSmartForm();
+    if (!/^AC3110-DVT\d+(?:-\d+)?$/i.test(payload.robotId)) { alert('Robot ID must match AC3110-DVTn or AC3110-DVTn-n.'); return; }
+    if (payload.lidarType === 'accuracy' && (!payload.runA.distance || !payload.runB.distance || !payload.runC.distance)) { alert('Complete all three sequential measurements: 5 m, 10 m, and 15 m.'); return; }
+    localStorage.setItem('last_lidar_tester', payload.tester);
+    var button = document.getElementById('lidarSmartCommit');
+    button.disabled = true; button.innerText = 'Importing…';
+    google.script.run.withSuccessHandler(function(response) {
+      button.disabled = false; button.innerText = 'Import record';
+      if (!response || !response.success) { alert('Smart Import Error: ' + (response && response.error ? response.error : 'Unknown error')); return; }
+      recentLidarImportRobotId = payload.robotId;
+      recentLidarImportDate = payload.date;
+      recentLidarImportStartIndex = response.imported && response.imported.firstRow ? Number(response.imported.firstRow) - 3 : null;
+      rawLidarResponse = response.data;
+      activeLidarSubTab = payload.lidarType;
+      saveTabCache('lidar', { type:'lidar', data:response.data });
+      renderSubPills();
+      renderSplitLidarTable(response.data);
+      closeLidarSmartImportModal();
+      highlightImportedLidarRow(payload.robotId, payload.date, recentLidarImportStartIndex);
+      var toast = document.getElementById('copyToast');
+      toast.innerHTML = '<span style="color:#34d399;font-weight:800;">✓</span><span>LiDAR record imported</span>';
+      toast.style.display = 'flex'; setTimeout(function() { toast.style.display = 'none'; }, 2200);
+    }).withFailureHandler(function(error) {
+      button.disabled = false; button.innerText = 'Import record';
+      alert('Smart Import Error: ' + (error && error.message ? error.message : error));
+    }).smartImportLidarRecord(payload);
+  }
+
+  function highlightImportedLidarRow(robotId, recordDate, sourceIndex) {
+    setTimeout(function() {
+      var rows = document.querySelectorAll('.lidar-inspection-table tbody tr[data-robot-id]');
+      var matchedRow = Array.prototype.slice.call(rows).find(function(row) { return sourceIndex !== null && sourceIndex !== undefined && Number(row.dataset.sourceIndex) === sourceIndex; }) ||
+        Array.prototype.slice.call(rows).find(function(row) { return row.dataset.robotId === robotId && (!recordDate || row.dataset.recordDate === recordDate); }) ||
+        Array.prototype.slice.call(rows).find(function(row) { return row.dataset.robotId === robotId; });
+      if (!matchedRow) return;
+      matchedRow.classList.add('lidar-row-imported');
+      matchedRow.scrollIntoView({ block:'nearest', behavior:'smooth' });
+      setTimeout(function() { matchedRow.classList.remove('lidar-row-imported'); }, 2200);
+    }, 40);
+  }
+
+  document.addEventListener('paste', function(event) {
+    if (currentTab !== 'lidar') return;
+    var target = event.target;
+    var tag = target && target.tagName ? target.tagName.toUpperCase() : '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (target && target.isContentEditable)) return;
+    var text = event.clipboardData && event.clipboardData.getData ? event.clipboardData.getData('text/plain') : '';
+    if (!text || !text.trim()) return;
+    event.preventDefault();
+    openLidarSmartPasteModal(text);
+  });
+
   function submitForm(e) {
     e.preventDefault();
     var saveBtn = document.getElementById('saveBtn');

@@ -24,4 +24,149 @@
   function getHeadDepthImageTitle(header) {
     return String(header || HEAD_DEPTH_UI.imageLabel).trim() || HEAD_DEPTH_UI.imageLabel;
   }
+
+  var headDepthRecentRow = null;
+
+  function getHeadDepthColumnOrder() {
+    return { robot:0, date:1, sw:2, temp:3, humidity:4, lux:5, tester:6, point03:7, image05:8, image10:9, shrink:10, undetected:11, status:12, note:13 };
+  }
+
+  function headDepthUniqueValues(rows, index) {
+    var values = {};
+    (rows || []).forEach(function(row) { var value = String(row[index] || '').trim(); if (value) values[value] = true; });
+    return Object.keys(values).sort();
+  }
+
+  function renderHeadDepthImageValue(value, label) {
+    var text = String(value || '').trim();
+    if (!text) return '<span class="empty-cell">—</span>';
+    if (/^https?:\/\//i.test(text) || /^data:image\//i.test(text)) {
+      return '<a class="head-depth-image-value" href="' + escapeHtml(text) + '" target="_blank" rel="noopener" title="Open ' + escapeHtml(label) + '"><img src="' + escapeHtml(text) + '" alt="' + escapeHtml(label) + '" loading="lazy" onerror="this.style.display=\'none\'"><span>↗</span></a>';
+    }
+    return escapeHtml(text);
+  }
+
+  function renderHeadDepthSmartTable(response, filteredRows) {
+    var container = document.getElementById('tableContainer');
+    var rows = (filteredRows || []).slice();
+    var headerRow = response.headerRow || 1;
+    if (headDepthRecentRow) {
+      var recentIndex = headDepthRecentRow - headerRow - 1;
+      rows.sort(function(a, b) { return a.originalIndex === recentIndex ? -1 : (b.originalIndex === recentIndex ? 1 : 0); });
+    }
+    var order = getHeadDepthColumnOrder();
+    var headers = response.headers || [];
+    var labels = ['Robot ID','Date','SW Version','Temp C','Humidity %','Luminosity Lux','Tester','0.3m','0.5m Image','1.0m Image','Shrink Distance (m)','Totally Undetected (m)','Pass/Fail','Note / Link'];
+    var html = '<div class="panel-card smart-table-card head-depth-smart-card"><div class="panel-header"><div><div class="eyebrow">DATA EXPLORER</div><h1 class="module-panel-title">Head Depth Camera</h1>' + (response.purpose ? '<p class="module-purpose"><strong>Purpose</strong><span>' + escapeHtml(response.purpose) + '</span></p>' : '') + '</div><span class="record-count">' + rows.length + ' rows</span></div><div class="table-scroller head-depth-smart-scroll"><table class="smart-table head-depth-smart-table"><thead><tr>';
+    labels.forEach(function(label) { html += '<th>' + escapeHtml(label) + '</th>'; });
+    html += '<th>Action</th></tr></thead><tbody>';
+    if (!rows.length) html += '<tr><td colspan="15" class="head-depth-empty">No Head Depth records found.</td></tr>';
+    rows.forEach(function(item) {
+      var row = item.row || [];
+      var sourceRow = headerRow + 1 + item.originalIndex;
+      var robot = row[order.robot] || '—';
+      html += '<tr data-head-depth-row="' + sourceRow + '" data-robot-id="' + escapeHtml(robot) + '">';
+      html += '<td class="identity-cell"><strong>' + escapeHtml(robot) + '</strong></td><td>' + escapeHtml(row[order.date] || '—') + '</td><td>' + escapeHtml(row[order.sw] || '—') + '</td><td>' + escapeHtml(row[order.temp] || '—') + '</td><td>' + escapeHtml(row[order.humidity] || '—') + '</td><td>' + escapeHtml(row[order.lux] || '—') + '</td><td>' + escapeHtml(row[order.tester] || '—') + '</td><td>' + escapeHtml(row[order.point03] || '—') + '</td><td>' + renderHeadDepthImageValue(row[order.image05], labels[order.image05]) + '</td><td>' + renderHeadDepthImageValue(row[order.image10], labels[order.image10]) + '</td><td>' + escapeHtml(row[order.shrink] || '—') + '</td><td>' + escapeHtml(row[order.undetected] || '—') + '</td><td>' + renderStatusBadge(row[order.status] || 'Pass') + '</td><td>' + (row[order.note] ? (/^https?:\/\//i.test(String(row[order.note])) ? '<a class="data-link" href="' + escapeHtml(row[order.note]) + '" target="_blank" rel="noopener">Open ↗</a>' : escapeHtml(row[order.note])) : '<span class="empty-cell">—</span>') + '</td><td class="module-action-cell">' + renderGenericActionDropdown('headdepth', sourceRow) + '</td></tr>';
+    });
+    container.innerHTML = html + '</tbody></table></div></div>';
+    setSyncState('Synced ' + response.updatedAt, 'ready');
+  }
+
+  function ensureHeadDepthRecordModal() {
+    var modal = document.getElementById('headDepthRecordModal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'headDepthRecordModal';
+    modal.className = 'modal-overlay head-depth-record-overlay';
+    modal.onclick = function(event) { if (event.target === modal) closeHeadDepthRecordModal(); };
+    document.body.appendChild(modal);
+    return modal;
+  }
+
+  function headDepthSelectOptions(values, selected) {
+    return values.map(function(value) { return '<option value="' + escapeHtml(value) + '"' + (value === selected ? ' selected' : '') + '>' + escapeHtml(value) + '</option>'; }).join('');
+  }
+
+  function updateHeadDepthImagePreview(id, value) {
+    var preview = document.getElementById(id);
+    if (!preview) return;
+    var url = String(value || '').trim();
+    preview.innerHTML = /^https?:\/\//i.test(url) || /^data:image\//i.test(url) ? '<img src="' + escapeHtml(url) + '" alt="Image preview" onerror="this.parentElement.innerHTML=\'<span>Preview unavailable</span>\'">' : '<span>Paste a valid image URL to preview</span>';
+  }
+
+  function setHeadDepthStatus(value) {
+    var field = document.getElementById('hd_status');
+    if (field) field.value = value === 'Fail' ? 'Fail' : 'Pass';
+    document.querySelectorAll('.head-depth-status-toggle button').forEach(function(button) { button.classList.toggle('active', button.dataset.value === (field ? field.value : 'Pass')); });
+  }
+
+  function openHeadDepthRecordModal() {
+    if (!rawModuleResponse) return;
+    var order = getHeadDepthColumnOrder();
+    var rows = rawModuleResponse.rows || [];
+    var robots = headDepthUniqueValues(rows, order.robot);
+    try { JSON.parse(localStorage.getItem('registered_robot_names') || '[]').forEach(function(value) { if (robots.indexOf(value) === -1) robots.push(value); }); } catch (error) {}
+    var lastRobot = localStorage.getItem('last_headdepth_robot') || robots[0] || '';
+    var lastTester = localStorage.getItem('last_headdepth_tester') || headDepthUniqueValues(rows, order.tester)[0] || '';
+    var lastSw = localStorage.getItem('last_headdepth_sw') || headDepthUniqueValues(rows, order.sw)[0] || '';
+    var now = new Date();
+    var today = now.getFullYear() + '/' + String(now.getMonth() + 1).padStart(2, '0') + '/' + String(now.getDate()).padStart(2, '0');
+    var modal = ensureHeadDepthRecordModal();
+    modal.innerHTML = '<div class="head-depth-record-panel table-card" role="dialog" aria-modal="true" aria-labelledby="headDepthRecordTitle"><header><div><span>SMART DATA ENTRY</span><h3 id="headDepthRecordTitle">Add Head Depth Camera Record</h3><p>Paste a 14-column sheet row or enter the environment and measurement values.</p></div><button type="button" onclick="closeHeadDepthRecordModal()" aria-label="Close">×</button></header><form id="headDepthRecordForm" onsubmit="submitHeadDepthRecord(event)"><div class="head-depth-entry-grid"><section><h4>Meta &amp; Environment</h4><label><span>Robot ID</span><select id="hd_robot" required>' + headDepthSelectOptions(robots,lastRobot) + '</select></label><label><span>Date</span><input id="hd_date" value="' + today + '" required></label><label><span>SW Version</span><input id="hd_sw" list="headDepthSwList" value="' + escapeHtml(lastSw) + '" required><datalist id="headDepthSwList">' + headDepthSelectOptions(headDepthUniqueValues(rows,order.sw),'') + '</datalist></label><label><span>Tester</span><input id="hd_tester" list="registeredTesterList" value="' + escapeHtml(lastTester) + '" required></label><label><span>Temp C</span><input id="hd_temp" type="number" step="0.1"></label><label><span>Humidity %</span><input id="hd_humidity" type="number" step="0.1"></label><label><span>Luminosity Lux</span><input id="hd_lux"></label></section><section><h4>Measurements</h4><label><span>0.3m</span><input id="hd_point03" value="undetected"></label><label><span>0.5m Image URL</span><input id="hd_image05" oninput="updateHeadDepthImagePreview(\'hd_preview05\',this.value)"><div id="hd_preview05" class="head-depth-url-preview"><span>Paste a valid image URL to preview</span></div></label><label><span>1.0m Image URL</span><input id="hd_image10" oninput="updateHeadDepthImagePreview(\'hd_preview10\',this.value)"><div id="hd_preview10" class="head-depth-url-preview"><span>Paste a valid image URL to preview</span></div></label><div class="head-depth-two-fields"><label><span>Shrink Distance (m)</span><input id="hd_shrink" type="number" step="0.001"></label><label><span>Totally Undetected (m)</span><input id="hd_undetected" type="number" step="0.001"></label></div><label><span>Status</span><div class="head-depth-status-toggle"><button type="button" data-value="Pass" class="active" onclick="setHeadDepthStatus(\'Pass\')">Pass</button><button type="button" data-value="Fail" onclick="setHeadDepthStatus(\'Fail\')">Fail</button><input id="hd_status" type="hidden" value="Pass"></div></label><label><span>Note / Link</span><input id="hd_note"></label></section></div><div class="head-depth-paste-strip"><strong>Ctrl + V ready</strong><span>Tab-separated order: Robot, Date, SW, Temp, Humidity, Lux, Tester, 0.3m, 0.5m, 1.0m, Shrink, Undetected, Status, Note</span></div><footer><span>14 columns will be appended to the Head Depth sheet</span><button type="button" class="btn-ctrl" onclick="closeHeadDepthRecordModal()">Cancel</button><button type="submit" class="btn-action" id="headDepthSaveButton">Save Record</button></footer></form></div>';
+    modal.style.display = 'flex';
+  }
+
+  function closeHeadDepthRecordModal() {
+    var modal = document.getElementById('headDepthRecordModal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  function parseHeadDepthPaste(text) {
+    var line = String(text || '').split(/\r?\n/).filter(function(value) { return value.trim(); })[0] || '';
+    var cells = line.split('\t');
+    if (cells.length < 10) cells = line.split(',');
+    return cells.map(function(value) { return value.trim(); });
+  }
+
+  function applyHeadDepthPaste(cells) {
+    var ids = ['hd_robot','hd_date','hd_sw','hd_temp','hd_humidity','hd_lux','hd_tester','hd_point03','hd_image05','hd_image10','hd_shrink','hd_undetected','hd_status','hd_note'];
+    ids.forEach(function(id, index) { var field = document.getElementById(id); if (field && cells[index] !== undefined) field.value = cells[index]; });
+    setHeadDepthStatus(document.getElementById('hd_status').value);
+    updateHeadDepthImagePreview('hd_preview05', document.getElementById('hd_image05').value);
+    updateHeadDepthImagePreview('hd_preview10', document.getElementById('hd_image10').value);
+  }
+
+  document.addEventListener('paste', function(event) {
+    var modal = document.getElementById('headDepthRecordModal');
+    if (currentTab !== 'headdepth' || !modal || modal.style.display === 'none') return;
+    var text = event.clipboardData && event.clipboardData.getData ? event.clipboardData.getData('text/plain') : '';
+    if (!text || text.indexOf('\t') === -1) return;
+    var cells = parseHeadDepthPaste(text);
+    if (cells.length < 10) return;
+    event.preventDefault();
+    applyHeadDepthPaste(cells);
+    var toast = document.getElementById('copyToast');
+    toast.innerHTML = '<span style="color:#34d399;font-weight:800;">✓</span><span>Head Depth row mapped</span>';
+    toast.style.display = 'flex'; setTimeout(function() { toast.style.display = 'none'; }, 1800);
+  });
+
+  function submitHeadDepthRecord(event) {
+    event.preventDefault();
+    var form = document.getElementById('headDepthRecordForm');
+    if (form.reportValidity && !form.reportValidity()) return;
+    var fields = ['hd_robot','hd_date','hd_sw','hd_temp','hd_humidity','hd_lux','hd_tester','hd_point03','hd_image05','hd_image10','hd_shrink','hd_undetected','hd_status','hd_note'];
+    var values = fields.map(function(id) { var field = document.getElementById(id); return field ? field.value.trim() : ''; });
+    localStorage.setItem('last_headdepth_robot', values[0]); localStorage.setItem('last_headdepth_sw', values[2]); localStorage.setItem('last_headdepth_tester', values[6]);
+    var button = document.getElementById('headDepthSaveButton'); button.disabled = true; button.innerText = 'Saving…';
+    google.script.run.withSuccessHandler(function(response) {
+      button.disabled = false; button.innerText = 'Save Record';
+      if (!response || !response.success) { handleFail(response && response.error ? response.error : 'Head Depth save failed.'); return; }
+      headDepthRecentRow = response.imported && response.imported.firstRow ? response.imported.firstRow : null;
+      rawModuleResponse = response.data;
+      saveTabCache('headdepth', { type:'module', data:response.data });
+      closeHeadDepthRecordModal();
+      renderSmartModule(response.data);
+      setTimeout(function() { var row = document.querySelector('tr[data-head-depth-row="' + headDepthRecentRow + '"]'); if (row) { row.classList.add('head-depth-row-imported'); setTimeout(function() { row.classList.remove('head-depth-row-imported'); }, 2200); } }, 30);
+    }).withFailureHandler(function(error) { button.disabled = false; button.innerText = 'Save Record'; handleFail(error); }).appendHeadDepthRecord({ sheetName:rawModuleResponse.sheetName, values:values });
+  }
 </script>

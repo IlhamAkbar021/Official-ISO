@@ -7,20 +7,26 @@
   var rawWifiResponse = null;
   var rawModuleResponse = null;
   var loadRequestId = 0;
-  var activeLidarSubTab = 'all'; 
+  var activeLidarSubTab = 'accuracy';
+  var recentLidarImportRobotId = '';
+  var recentLidarImportDate = '';
+  var recentLidarImportStartIndex = null;
   var traverseResultFilter = 'all';
   var searchQuery = '';
   var currentLang = localStorage.getItem('app_lang') || 'en';
   var registeredTesterNames = [];
+  var inlineRecordActive = false;
+  var inlineRecordModuleKey = '';
+  var pendingInlineModuleResponse = null;
 
   var I18N = {
     en: {
       app_title: "AC3110 DVT ISO",
       nav_overview: "Overview",
       nav_general: "General Info",
-      nav_static: "STATIC ISO",
-      nav_dynamic: "DYNAMIC ISO",
-      nav_accuracy: "ACCURACY & REPEATABILITY",
+      nav_static: "Static ISO",
+      nav_dynamic: "Dynamic ISO",
+      nav_accuracy: "Accuracy & Repeatability",
       search_placeholder: "Search Robot ID, Tester...",
       refresh: "Refresh",
       add_record: "+ Add Record",
@@ -86,6 +92,8 @@
       group.classList.toggle('collapsed', !willOpen);
       headerEl.classList.toggle('collapsed', !willOpen);
       headerEl.classList.toggle('section-active', willOpen);
+      var toggle = headerEl.querySelector('.nav-section-toggle');
+      if (toggle) toggle.setAttribute('aria-expanded', String(willOpen));
     }
   }
 
@@ -97,6 +105,8 @@
       if (header && header.classList.contains('nav-section-header')) {
         header.classList.add('collapsed');
         header.classList.remove('section-active');
+        var toggle = header.querySelector('.nav-section-toggle');
+        if (toggle) toggle.setAttribute('aria-expanded', 'false');
       }
     });
   }
@@ -108,6 +118,8 @@
       if (header && header.classList.contains('nav-section-header')) {
         header.classList.add('collapsed');
         header.classList.remove('section-active');
+        var toggle = header.querySelector('.nav-section-toggle');
+        if (toggle) toggle.setAttribute('aria-expanded', 'false');
       }
     });
   }
@@ -125,8 +137,36 @@
   }
 
   function openWorkspace(workspace) {
-    var firstTabs = { overview: 'overview', static: 'lidar', dynamic: 'ratedspeed', accuracy: 'accuracylaser' };
-    switchTab(firstTabs[workspace] || 'overview');
+    openOverviewScope(workspace === 'overview' ? 'all' : workspace);
+  }
+
+  function openOverviewScope(scope) {
+    var allowed = ['all', 'static', 'dynamic', 'accuracy'];
+    if (allowed.indexOf(scope) === -1) scope = 'all';
+    window.overviewScope = scope;
+    window.overviewTriageFilter = false;
+    window.overviewTestFilter = '';
+    var savedStatsPreference = localStorage.getItem('overview_stats_' + scope);
+    window.overviewShowStatistics = savedStatsPreference === null ? scope !== 'static' : savedStatsPreference === '1';
+    localStorage.setItem('overview_scope', scope);
+    window.overviewView = scope === 'all' ? 'statistics' : 'matrix';
+    switchTab('overview');
+    syncOverviewScopeNavigation(scope);
+    var title = document.getElementById('topHeaderTitle');
+    if (title) title.innerText = scope === 'all' ? 'Overview' : (scope === 'static' ? 'Static ISO' : (scope === 'dynamic' ? 'Dynamic ISO' : 'Accuracy & Repeatability'));
+  }
+
+  function syncOverviewScopeNavigation(scope) {
+    document.querySelectorAll('.nav-section-header.scope-active').forEach(function(header) { header.classList.remove('scope-active'); });
+    if (scope && scope !== 'all') {
+      var header = document.getElementById('nav-scope-' + scope);
+      if (header) header.classList.add('scope-active');
+      var overviewButton = document.getElementById('nav-overview');
+      if (overviewButton) {
+        overviewButton.classList.remove('active');
+        overviewButton.removeAttribute('aria-current');
+      }
+    }
   }
 
   function updateWorkspaceTabs(tabId) {
@@ -144,12 +184,19 @@
   }
 
   function switchTab(tabId) {
+    if (tabId !== currentTab && inlineRecordActive) discardInlineGenericRecord();
+    var sidebarSearch = document.getElementById('sidebarSearchInput');
+    if (sidebarSearch && sidebarSearch.value) {
+      sidebarSearch.value = '';
+      filterSidebarNavigation('');
+    }
     if (tabId !== currentTab) {
       searchQuery = '';
       var tabSearch = document.getElementById('tableSearchInput');
       if (tabSearch) tabSearch.value = '';
     }
     currentTab = tabId;
+    if (tabId !== 'overview') syncOverviewScopeNavigation('all');
     var pageScroller = document.querySelector('.content-scroll-area');
     if (pageScroller) pageScroller.classList.toggle('lidar-table-only-scroll', tabId === 'lidar');
     if (pageScroller) pageScroller.classList.toggle('overview-no-global-scroll', tabId === 'overview');
@@ -177,9 +224,11 @@
     updateWorkspaceTabs(tabId);
 
     var activeLabel = activeBtn ? activeBtn.querySelector('.nav-label') : null;
-    var topTitle = (tabId === 'overview' || tabId === 'general')
-      ? (activeLabel ? activeLabel.innerText.trim() : (activeBtn ? activeBtn.innerText.trim() : 'Dashboard'))
-      : '';
+    var topTitle = activeLabel ? activeLabel.innerText.trim() : (activeBtn ? activeBtn.innerText.trim() : 'Dashboard');
+    if (tabId === 'overview' && window.overviewScope && window.overviewScope !== 'all') {
+      syncOverviewScopeNavigation(window.overviewScope);
+      topTitle = window.overviewScope === 'static' ? 'Static ISO' : (window.overviewScope === 'dynamic' ? 'Dynamic ISO' : 'Accuracy & Repeatability');
+    }
     document.getElementById('topHeaderTitle').innerText = topTitle;
     var kicker = document.getElementById('headerKicker');
     if (kicker) {
@@ -201,7 +250,11 @@
         if (headerTools) headerTools.style.display = 'inline-flex';
         var addBtn = document.getElementById('addRecordBtn');
         var searchInput = document.getElementById('tableSearchInput');
-        if (addBtn) addBtn.style.display = (tabId === 'wifi' || tabId === 'lidar' || isGenericModule(tabId)) ? 'inline-flex' : 'none';
+        if (addBtn) {
+          addBtn.style.display = (tabId === 'wifi' || tabId === 'lidar' || isGenericModule(tabId)) ? 'inline-flex' : 'none';
+          addBtn.innerText = tabId === 'lidar' ? '+ Add LiDAR Record' : '+ Add Record';
+          addBtn.setAttribute('onclick', tabId === 'lidar' ? 'openLidarSmartPasteModal()' : (tabId === 'basedepth' ? 'openBaseDepthRecordModal()' : (tabId === 'headdepth' ? 'openHeadDepthRecordModal()' : 'openInputModal()')));
+        }
         if (searchInput) searchInput.style.display = 'block';
       }
     }
@@ -214,10 +267,9 @@
     var pillsDiv = document.getElementById('subPillsContainer');
     if (currentTab === 'lidar') {
       pillsDiv.innerHTML = 
-        '<div class="sub-pills">' +
-          '<button class="pill-btn ' + (activeLidarSubTab === 'all' ? 'active' : '') + '" onclick="switchLidarSubTab(\'all\')">All Modules</button>' +
-          '<button class="pill-btn ' + (activeLidarSubTab === 'accuracy' ? 'active' : '') + '" onclick="switchLidarSubTab(\'accuracy\')">Accuracy Collection</button>' +
-          '<button class="pill-btn ' + (activeLidarSubTab === 'tilt' ? 'active' : '') + '" onclick="switchLidarSubTab(\'tilt\')">Tilt & Angle Data</button>' +
+        '<div class="sub-pills lidar-view-toggle" role="tablist" aria-label="LiDAR inspection view">' +
+          '<button role="tab" aria-selected="' + (activeLidarSubTab === 'accuracy') + '" class="pill-btn ' + (activeLidarSubTab === 'accuracy' ? 'active' : '') + '" onclick="switchLidarSubTab(\'accuracy\')">Accuracy Collection</button>' +
+          '<button role="tab" aria-selected="' + (activeLidarSubTab === 'tilt') + '" class="pill-btn ' + (activeLidarSubTab === 'tilt' ? 'active' : '') + '" onclick="switchLidarSubTab(\'tilt\')">Tilt &amp; Angle Data</button>' +
         '</div>';
     } else {
       pillsDiv.innerHTML = '';
@@ -225,6 +277,7 @@
   }
 
   function switchLidarSubTab(subTab) {
+    if (subTab !== 'accuracy' && subTab !== 'tilt') subTab = 'accuracy';
     activeLidarSubTab = subTab;
     renderSubPills();
     if (rawLidarResponse) renderSplitLidarTable(rawLidarResponse);
@@ -238,13 +291,42 @@
   }
 
   function focusQuickSearch() {
-    var bar = document.getElementById('headerTools');
-    var search = document.getElementById('tableSearchInput');
-    if (!bar || !search || currentTab === 'overview' || currentTab === 'general') return;
-    bar.style.display = 'inline-flex';
-    search.style.display = 'block';
+    var search = document.getElementById('sidebarSearchInput');
+    if (!search) return;
     search.focus();
     search.select();
+  }
+
+  function filterSidebarNavigation(value) {
+    var query = String(value || '').trim().toLowerCase();
+    document.body.classList.toggle('sidebar-searching', !!query);
+    document.querySelectorAll('.nav-menu > .nav-item').forEach(function(item) {
+      item.style.display = !query || item.innerText.toLowerCase().indexOf(query) !== -1 ? 'flex' : 'none';
+    });
+    document.querySelectorAll('.nav-section-header').forEach(function(header) {
+      var group = header.nextElementSibling;
+      var headerMatch = !query || header.innerText.toLowerCase().indexOf(query) !== -1;
+      var childMatch = false;
+      if (group && group.classList.contains('nav-group')) {
+        group.querySelectorAll('.nav-item').forEach(function(item) {
+          var matches = !query || headerMatch || item.innerText.toLowerCase().indexOf(query) !== -1;
+          item.style.display = matches ? 'flex' : 'none';
+          if (matches && query) childMatch = true;
+        });
+      }
+      header.style.display = headerMatch || childMatch ? 'flex' : 'none';
+    });
+  }
+
+  function updateNavSuiteCounts() {
+    ['static', 'dynamic', 'accuracy'].forEach(function(scope) {
+      var group = document.getElementById('group-' + scope);
+      var badge = document.querySelector('#nav-scope-' + scope + ' .badge-count');
+      if (!group || !badge) return;
+      var count = group.querySelectorAll('.nav-item').length;
+      badge.innerText = count;
+      badge.title = count + ' modules';
+    });
   }
 
   function toggleLanguage() {
@@ -270,7 +352,7 @@
     var refEl = document.getElementById('refreshBtnText');
     if(refEl) refEl.innerText = t('refresh');
     var addEl = document.getElementById('addRecordBtn');
-    if(addEl) addEl.innerText = t('add_record');
+    if(addEl) addEl.innerText = currentTab === 'lidar' ? '+ Add LiDAR Record' : t('add_record');
   }
 
   function confirmRefresh() {
@@ -292,11 +374,37 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
   }
 
+  var lastSyncAt = 0;
+  var currentSyncState = 'loading';
+
+  function formatSyncAge() {
+    if (!lastSyncAt) return 'Connecting…';
+    var seconds = Math.max(0, Math.floor((Date.now() - lastSyncAt) / 1000));
+    if (seconds < 5) return 'Synced just now';
+    if (seconds < 60) return 'Synced ' + seconds + 's ago';
+    var minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return 'Synced ' + minutes + 'm ago';
+    return 'Synced ' + Math.floor(minutes / 60) + 'h ago';
+  }
+
+  function updateSyncRelativeLabel() {
+    var text = document.getElementById('syncText');
+    if (text && currentSyncState === 'ready') text.innerText = formatSyncAge();
+  }
+
   function setSyncState(label, state) {
     var dot = document.getElementById('syncDot');
     var text = document.getElementById('syncText');
-    if (text) text.innerText = label;
-    if (dot) dot.className = 'sync-dot ' + (state || 'ready');
+    currentSyncState = state || 'ready';
+    if (currentSyncState === 'ready') {
+      lastSyncAt = Date.now();
+      window.lastOverviewSyncAt = lastSyncAt;
+    }
+    if (text) {
+      text.innerText = currentSyncState === 'ready' ? formatSyncAge() : label;
+      text.title = label || '';
+    }
+    if (dot) dot.className = 'sync-dot ' + currentSyncState;
   }
 
   function renderGeneralInfoPage() {
@@ -537,6 +645,21 @@
       return;
     }
 
+    // A live Sheets refresh, search update, or language refresh must never
+    // replace an in-progress inline record. Keep the newest response and
+    // apply it after the technician saves or cancels the draft.
+    if (inlineRecordActive && inlineRecordModuleKey === response.key) {
+      if (document.querySelector('.inline-add-row')) {
+        pendingInlineModuleResponse = response;
+        setSyncState('New data ready · finish draft first', 'ready');
+        return;
+      }
+      // Recover from a stale flag if another renderer removed the row.
+      inlineRecordActive = false;
+      inlineRecordModuleKey = '';
+      pendingInlineModuleResponse = null;
+    }
+
     if (response.key === 'traversegap') {
       renderTraverseGap(response);
       return;
@@ -565,6 +688,8 @@
         var helperDescriptionRow = /is starting to shrink|becomes totally undetected/.test(text);
         return !(helperDistanceRow || (helperDescriptionRow && !robotValue));
       });
+      renderHeadDepthSmartTable(response, rows);
+      return;
     }
     var compactFlatModule = response.key === 'cliff';
     // Keep the module title, sheet source, purpose and records in one clean
@@ -887,7 +1012,7 @@
     var attention = groups.filter(function(group) { return group.state.key === 'fail' || group.state.key === 'warning'; }).length;
 
     if (response.key === 'basedepth' || /base\s+depth/i.test(String(response.title || ''))) {
-      renderBaseDepthCompactPage(response, groups);
+      renderBaseDepthMasterDetail(response, groups);
       return;
     }
 
@@ -1411,51 +1536,143 @@
       return;
     }
 
-    var html = '';
+    if (activeLidarSubTab !== 'accuracy' && activeLidarSubTab !== 'tilt') activeLidarSubTab = 'accuracy';
+    var groupedAccuracy = groupLidarAccuracyPivoted((response.accuracy && response.accuracy.rows) || []);
+    if (recentLidarImportRobotId) {
+      groupedAccuracy.sort(function(a, b) {
+        var aRecent = recentLidarImportStartIndex !== null ? a.startRowIndex === recentLidarImportStartIndex : (a.robotId === recentLidarImportRobotId && (!recentLidarImportDate || a.date === recentLidarImportDate));
+        var bRecent = recentLidarImportStartIndex !== null ? b.startRowIndex === recentLidarImportStartIndex : (b.robotId === recentLidarImportRobotId && (!recentLidarImportDate || b.date === recentLidarImportDate));
+        return aRecent === bRecent ? 0 : (aRecent ? -1 : 1);
+      });
+    }
+    var tiltRows = filterRows((response.tilt && response.tilt.rows) || []);
+    var summary = getLidarInspectionSummary(groupedAccuracy, (response.tilt && response.tilt.rows) || []);
+    var isAccuracy = activeLidarSubTab === 'accuracy';
+    var visibleAccuracy = groupedAccuracy.filter(function(item) {
+      return !searchQuery || item.robotId.toLowerCase().indexOf(searchQuery) !== -1 || item.tester.toLowerCase().indexOf(searchQuery) !== -1;
+    });
+    var recordCount = isAccuracy ? visibleAccuracy.length : tiltRows.length;
+    var html = '<div class="lidar-inspection-page">' + renderLidarKpiStrip(summary) +
+      '<div class="panel-card lidar-panel lidar-inspection-card"><div class="lidar-sheet-header"><div><strong>' + (isAccuracy ? 'LiDAR Accuracy Inspection' : 'LiDAR Tilt & Angle Inspection') + '</strong><span>' + recordCount + ' unit' + (recordCount === 1 ? '' : 's') + ' · ' + (isAccuracy ? 'ISO tolerance ±0.05 m' : 'Calibration geometry and tilt direction') + '</span></div><span class="lidar-view-badge">' + (isAccuracy ? 'Accuracy' : 'Tilt') + '</span></div><div class="table-scroller lidar-table-scroll">';
 
-    html += '<div class="panel-card lidar-panel"><div class="lidar-sections">';
-
-    if (activeLidarSubTab === 'all' || activeLidarSubTab === 'accuracy') {
-      var groupedAccuracy = groupLidarAccuracyPivoted(response.accuracy.rows);
-      html += '<section class="lidar-section"><h3>LiDAR Accuracy Data Collection</h3><div class="table-scroller lidar-table-scroll"><table class="lidar-table lidar-accuracy-table">' +
-        '<colgroup><col style="width:18%"><col style="width:11%"><col style="width:14%"><col style="width:9%"><col style="width:14%"><col style="width:14%"><col style="width:14%"><col style="width:6%"></colgroup><thead><tr>' +
-        '<th>Robot ID</th><th>Date</th><th>SW Version</th><th>Tester</th><th>A - 5m</th><th>B - 10m</th><th>C - 15m</th><th>' + t('actions') + '</th>' +
-      '</tr></thead><tbody>';
-
-      if (groupedAccuracy.length === 0) {
-        html += '<tr><td colspan="8" style="padding:2rem; text-align:center; color:var(--text-muted);">No accuracy records found.</td></tr>';
+    if (isAccuracy) {
+      html += '<table class="lidar-table lidar-accuracy-table lidar-inspection-table"><colgroup><col class="lidar-id-col"><col class="lidar-release-col"><col class="lidar-tester-col"><col class="lidar-measure-col"><col class="lidar-measure-col"><col class="lidar-measure-col"><col class="lidar-action-col"></colgroup><thead><tr><th>Robot ID</th><th>Software / Date</th><th>Tester</th><th>Target 5 m</th><th>Target 10 m</th><th>Target 15 m</th><th>' + t('actions') + '</th></tr></thead><tbody>';
+      if (!visibleAccuracy.length) {
+        html += '<tr><td colspan="7" class="lidar-empty-row">No accuracy records found.</td></tr>';
       } else {
-        groupedAccuracy.forEach(function(item) {
-          if (searchQuery !== '' && item.robotId.toLowerCase().indexOf(searchQuery) === -1 && item.tester.toLowerCase().indexOf(searchQuery) === -1) return;
-          html += '<tr>' +
-            '<td class="lidar-robot-id" title="' + escapeHtml(item.robotId) + '">' + escapeHtml(item.robotId) + '</td>' +
-            '<td>' + escapeHtml(item.date) + '</td><td>' + escapeHtml(item.swVer) + '</td><td>' + escapeHtml(item.tester) + '</td>' +
-            '<td>' + renderRunPill(item.runA) + '</td><td>' + renderRunPill(item.runB) + '</td><td>' + renderRunPill(item.runC) + '</td>' +
-            '<td>' + renderActionDropdown('lidar_acc', item.startRowIndex) + '</td>' +
-          '</tr>';
+        visibleAccuracy.forEach(function(item) {
+          html += '<tr data-robot-id="' + escapeHtml(item.robotId) + '" data-record-date="' + escapeHtml(item.date) + '" data-source-index="' + item.startRowIndex + '"><td class="lidar-robot-id" title="' + escapeHtml(item.robotId) + '">' + escapeHtml(item.robotId) + '</td>' +
+            '<td>' + renderLidarReleaseCell(item.swVer, item.date) + '</td><td>' + escapeHtml(item.tester) + '</td>' +
+            '<td>' + renderLidarAccuracyMeasurement(item.runA, 5) + '</td><td>' + renderLidarAccuracyMeasurement(item.runB, 10) + '</td><td>' + renderLidarAccuracyMeasurement(item.runC, 15) + '</td>' +
+            '<td>' + renderActionDropdown('lidar_acc', item.startRowIndex) + '</td></tr>';
         });
       }
-      html += '</tbody></table></div></section>';
-    }
-
-    if (activeLidarSubTab === 'all' || activeLidarSubTab === 'tilt') {
-      var tiltRows = filterRows(response.tilt.rows);
-      html += '<section class="lidar-section"><h3>LiDAR Tilt Data Collection</h3><div class="table-scroller lidar-table-scroll"><table class="lidar-table lidar-tilt-table">' +
-        '<colgroup><col style="width:10%"><col style="width:8%"><col style="width:9%"><col style="width:7%"><col style="width:8%"><col style="width:9%"><col style="width:8%"><col style="width:8%"><col style="width:12%"><col style="width:6%"><col style="width:6%"><col style="width:5%"><col style="width:4%"></colgroup><thead><tr>';
-      response.tilt.headers.forEach(function(h) { html += '<th>' + (h || '-') + '</th>'; });
-      html += '<th>' + t('actions') + '</th></tr></thead><tbody>';
-      
-      if (tiltRows.length === 0) {
-        html += '<tr><td colspan="15" style="padding:2rem; text-align:center; color:var(--text-muted);">No tilt records found.</td></tr>';
+      html += '</tbody></table>';
+    } else {
+      html += '<table class="lidar-table lidar-tilt-table lidar-inspection-table"><colgroup><col class="lidar-id-col"><col class="lidar-release-col"><col class="lidar-tester-col"><col class="lidar-small-col"><col class="lidar-distance-col"><col class="lidar-small-col"><col class="lidar-small-col"><col class="lidar-status-col"><col class="lidar-angle-col"><col class="lidar-note-col"><col class="lidar-action-col"></colgroup><thead><tr><th>Robot ID</th><th>Software / Date</th><th>Tester</th><th>Bricks</th><th>Detected Distance</th><th>Height From</th><th>Height To</th><th>Tilt Status</th><th>Angle Range</th><th>Note / Link</th><th>' + t('actions') + '</th></tr></thead><tbody>';
+      if (!tiltRows.length) {
+        html += '<tr><td colspan="11" class="lidar-empty-row">No tilt records found.</td></tr>';
       } else {
-        tiltRows.forEach(function(item) { 
-          html += '<tr>' + buildRowCells(item.row, 0) + '<td>' + renderActionDropdown('lidar_tilt', item.originalIndex) + '</td></tr>'; 
+        tiltRows.forEach(function(item) {
+          var row = item.row || [];
+          html += '<tr data-robot-id="' + escapeHtml(row[0] || '') + '" data-record-date="' + escapeHtml(row[1] || '') + '"><td class="lidar-robot-id" title="' + escapeHtml(row[0] || '') + '">' + escapeHtml(row[0] || '—') + '</td>' +
+            '<td>' + renderLidarReleaseCell(row[2], row[1]) + '</td><td>' + escapeHtml(row[3] || '—') + '</td><td>' + escapeHtml(row[4] || '—') + '</td><td class="lidar-mono">' + renderLidarUnitValue(row[5], 'm') + '</td><td>' + renderLidarUnitValue(row[6], 'cm') + '</td><td>' + renderLidarUnitValue(row[7], 'cm') + '</td><td>' + renderLidarTiltStatus(row[8]) + '</td><td>' + renderLidarAngleRange(row[9], row[10]) + '</td><td>' + renderLidarEvidenceCell(row[11]) + '</td><td>' + renderActionDropdown('lidar_tilt', item.originalIndex) + '</td></tr>';
         });
       }
-      html += '</tbody></table></div></section>';
+      html += '</tbody></table>';
     }
-    html += '</div></div>';
+    html += '</div></div></div>';
     container.innerHTML = html;
+  }
+
+  var LIDAR_ISO_TOLERANCE_M = 0.05;
+
+  function parseLidarNumber(value) {
+    var number = parseFloat(String(value === null || value === undefined ? '' : value).replace(',', '.'));
+    return isFinite(number) ? number : null;
+  }
+
+  function getLidarRunState(run, target) {
+    if (!run) return 'empty';
+    var status = String(run.passFail || '').toLowerCase();
+    var measured = parseLidarNumber(run.distance);
+    var error = measured === null ? null : Math.abs(measured - target);
+    if (/fail|ng|reject|outside/.test(status)) return 'fail';
+    if (error === null) return 'empty';
+    if (error > LIDAR_ISO_TOLERANCE_M * 2) return 'fail';
+    if (error > LIDAR_ISO_TOLERANCE_M) return 'warn';
+    return 'pass';
+  }
+
+  function renderLidarAccuracyMeasurement(run, target) {
+    if (!run || parseLidarNumber(run.distance) === null) return '<span class="lidar-empty">—</span>';
+    var measured = parseLidarNumber(run.distance);
+    var delta = measured - target;
+    var state = getLidarRunState(run, target);
+    var deltaText = (delta >= 0 ? '+' : '') + delta.toFixed(2) + 'm';
+    return '<div class="lidar-measurement state-' + state + '" title="Target ' + target.toFixed(2) + 'm · ' + escapeHtml(run.passFail || state) + '"><strong>' + measured.toFixed(2) + 'm</strong><span>' + deltaText + '</span></div>';
+  }
+
+  function renderLidarReleaseCell(swVersion, date) {
+    return '<div class="lidar-release-cell"><strong>' + escapeHtml(swVersion || 'Not recorded') + '</strong><small>' + escapeHtml(date || 'Date unavailable') + '</small></div>';
+  }
+
+  function renderLidarTiltStatus(value) {
+    var text = String(value || '').trim();
+    var lower = text.toLowerCase();
+    var label = text || 'Not recorded';
+    var state = 'neutral';
+    if (/tilt\s*up/.test(lower)) { label = '▲ Tilt Up'; state = 'warn'; }
+    else if (/tilt\s*down/.test(lower)) { label = '▼ Tilt Down'; state = 'warn'; }
+    else if (/normal|acceptable|pass|ok/.test(lower)) { label = '✓ Normal'; state = 'pass'; }
+    else if (/fail|outside|reject|bad|ng/.test(lower)) { label = '! Review'; state = 'fail'; }
+    return '<span class="lidar-tilt-chip ' + state + '" title="' + escapeHtml(text) + '">' + label + '</span>';
+  }
+
+  function formatLidarAngle(value) {
+    var number = parseLidarNumber(value);
+    if (number === null) return '—';
+    return number.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1') + '°';
+  }
+
+  function renderLidarAngleRange(fromValue, toValue) {
+    return '<span class="lidar-angle-range">' + formatLidarAngle(fromValue) + ' – ' + formatLidarAngle(toValue) + '</span>';
+  }
+
+  function renderLidarUnitValue(value, unit) {
+    var number = parseLidarNumber(value);
+    return number === null ? '<span class="lidar-empty">—</span>' : escapeHtml(String(value)) + '<small class="lidar-unit"> ' + unit + '</small>';
+  }
+
+  function renderLidarEvidenceCell(value) {
+    var text = String(value || '').trim();
+    if (!text || text === '-') return '<span class="lidar-empty">—</span>';
+    if (/^https?:\/\//i.test(text)) return '<a class="data-link" href="' + escapeHtml(text) + '" target="_blank" rel="noopener noreferrer">Open ↗</a>';
+    return '<span title="' + escapeHtml(text) + '">' + escapeHtml(text) + '</span>';
+  }
+
+  function getLidarInspectionSummary(accuracyGroups, rawTiltRows) {
+    var units = {};
+    var maxError = null;
+    var pass = 0;
+    var total = 0;
+    (accuracyGroups || []).forEach(function(item) {
+      if (item.robotId) units[item.robotId] = true;
+      [[item.runA,5],[item.runB,10],[item.runC,15]].forEach(function(pair) {
+        var measured = pair[0] && parseLidarNumber(pair[0].distance);
+        if (measured === null || measured === false) return;
+        var error = Math.abs(measured - pair[1]);
+        maxError = maxError === null ? error : Math.max(maxError, error);
+        total++;
+        if (getLidarRunState(pair[0], pair[1]) === 'pass') pass++;
+      });
+    });
+    (rawTiltRows || []).forEach(function(row) { if (row && row[0]) units[String(row[0]).trim()] = true; });
+    return { totalUnits:Object.keys(units).length, maxError:maxError, passRate:total ? pass / total * 100 : null, sampleCount:total };
+  }
+
+  function renderLidarKpiStrip(summary) {
+    return '<section class="lidar-kpi-strip" aria-label="LiDAR inspection summary"><article><span>Total Units</span><strong>' + summary.totalUnits + '</strong><small>Registered in this module</small></article><article><span>Max Range Error</span><strong>' + (summary.maxError === null ? '—' : summary.maxError.toFixed(2) + ' m') + '</strong><small>Across 5 m, 10 m and 15 m</small></article><article><span>Calibration Pass Rate</span><strong class="' + (summary.passRate === null ? 'is-empty' : 'is-pass') + '">' + (summary.passRate === null ? '—' : summary.passRate.toFixed(1) + '%') + '</strong><small>' + summary.sampleCount + ' range samples</small></article></section>';
   }
 
   function groupLidarAccuracyPivoted(rows) {
@@ -1477,11 +1694,6 @@
       }
     });
     return groups;
-  }
-
-  function renderRunPill(run) {
-    if (!run) return '<span style="color:var(--text-muted);">-</span>';
-    return '<div class="lidar-run-pill"><span class="lidar-distance">' + escapeHtml(run.distance) + 'm</span>' + renderStatusBadge(run.passFail) + '</div>';
   }
 
   function filterRows(rows) {
@@ -1631,6 +1843,14 @@
     if (deleteBtn) deleteBtn.style.display = 'none';
     if (saveBtn) { saveBtn.disabled = false; saveBtn.innerText = 'Save Record'; }
 
+    if (currentTab === 'basedepth' && rawModuleResponse) {
+      openBaseDepthRecordModal();
+      return;
+    }
+    if (currentTab === 'headdepth' && rawModuleResponse) {
+      openHeadDepthRecordModal();
+      return;
+    }
     if (isGenericModule(currentTab) && rawModuleResponse) {
       openInlineGenericRecord();
       return;
@@ -1641,8 +1861,6 @@
     else return;
     document.getElementById('inputModal').style.display = 'flex';
   }
-
-  var inlineRecordActive = false;
 
   function getModuleColumnOptions(columnIndex) {
     var values = {};
@@ -1695,6 +1913,8 @@
     var body = document.getElementById('genericModuleTableBody');
     if (!body) return;
     inlineRecordActive = true;
+    inlineRecordModuleKey = rawModuleResponse.key || currentTab;
+    pendingInlineModuleResponse = null;
     var headers = rawModuleResponse.headers || [];
     var robotColumn = rawModuleResponse.roles && rawModuleResponse.roles.robot >= 0 ? rawModuleResponse.roles.robot : 0;
     var testerColumn = rawModuleResponse.roles && rawModuleResponse.roles.tester >= 0 ? rawModuleResponse.roles.tester : -1;
@@ -1762,6 +1982,21 @@
     var row = document.querySelector('.inline-add-row');
     if (row) row.remove();
     inlineRecordActive = false;
+    inlineRecordModuleKey = '';
+    if (pendingInlineModuleResponse) {
+      var latestResponse = pendingInlineModuleResponse;
+      pendingInlineModuleResponse = null;
+      rawModuleResponse = latestResponse;
+      renderSmartModule(latestResponse);
+    }
+  }
+
+  function discardInlineGenericRecord() {
+    var row = document.querySelector('.inline-add-row');
+    if (row) row.remove();
+    inlineRecordActive = false;
+    inlineRecordModuleKey = '';
+    pendingInlineModuleResponse = null;
   }
 
   function saveInlineGenericRecord() {
@@ -1783,11 +2018,18 @@
     var button = document.querySelector('.inline-save-button');
     if (button) { button.disabled = true; button.innerText = 'Saving…'; }
     google.script.run.withSuccessHandler(function(response) {
-      if (!response || !response.success) { handleFail(response && response.error ? response.error : 'Save failed.'); return; }
-      inlineRecordActive = false;
+      if (!response || !response.success) {
+        if (button) { button.disabled = false; button.innerText = 'Save'; }
+        handleFail(response && response.error ? response.error : 'Save failed.');
+        return;
+      }
+      discardInlineGenericRecord();
       localStorage.removeItem('iso_tab_cache_' + rawModuleResponse.key);
       loadCurrentTab();
-    }).withFailureHandler(handleFail).appendIsoModuleRecord({
+    }).withFailureHandler(function(error) {
+      if (button) { button.disabled = false; button.innerText = 'Save'; }
+      handleFail(error);
+    }).appendIsoModuleRecord({
       moduleKey: rawModuleResponse.key,
       sheetName: rawModuleResponse.sheetName,
       values: values
@@ -1949,6 +2191,7 @@
     var tag = document.activeElement ? document.activeElement.tagName : '';
     if (event.key === '/' && tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
       var search = document.getElementById('tableSearchInput');
+      if (!search || search.offsetParent === null) search = document.getElementById('sidebarSearchInput');
       if (search && search.offsetParent !== null) {
         event.preventDefault();
         search.focus();
@@ -1985,8 +2228,10 @@
     loadRegisteredRobotNames();
     toggleSidebarRail(localStorage.getItem('iso_sidebar_rail') === '1');
     collapseAllNavGroups();
+    updateNavSuiteCounts();
     var lastTab = localStorage.getItem('last_iso_tab');
     switchTab(document.getElementById('nav-' + lastTab) ? lastTab : 'overview');
+    window.setInterval(updateSyncRelativeLabel, 5000);
     document.querySelectorAll('.nav-item').forEach(function(item) {
       var tabId = item.id.replace(/^nav-/, '');
       item.addEventListener('mouseenter', function() { prefetchModuleTab(tabId); }, { passive:true });

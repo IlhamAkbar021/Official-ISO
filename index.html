@@ -16,21 +16,26 @@
       <div class="brand-mark"><span>A</span></div>
       <div class="brand-copy"><div class="brand-chip">Product Performance</div>
       <h1 id="appMainTitle">AC3110 DVT ISO</h1>
-      <div class="brand-environment"><span></span> Google Sheets live</div></div>
+      <div class="brand-environment" id="syncState" title="Google Sheets connection status"><span class="sync-dot ready" id="syncDot"></span><span id="syncText">Connecting…</span></div></div>
       <button class="sidebar-rail-toggle" type="button" onclick="toggleSidebarRail()" aria-label="Collapse navigation" title="Collapse navigation">‹</button>
     </div>
+    <label class="sidebar-search" for="sidebarSearchInput"><span class="key-badge">/</span><input id="sidebarSearchInput" type="search" placeholder="Search modules, tests…" autocomplete="off" oninput="filterSidebarNavigation(this.value)" aria-label="Search navigation"></label>
     <nav class="nav-menu">
-      <button class="nav-item active" id="nav-overview" onclick="switchTab('overview')">
-        <span class="nav-icon">OV</span><span class="nav-label" id="nav_txt_overview">Overview</span>
+      <div class="nav-group-label">Core Views</div>
+      <button class="nav-item active" id="nav-overview" onclick="openOverviewScope('all')">
+        <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="3" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect></svg></span><span class="nav-label" id="nav_txt_overview">Overview</span>
       </button>
       <button class="nav-item" id="nav-general" onclick="switchTab('general')">
-        <span class="nav-icon">IN</span><span class="nav-label" id="nav_txt_general">General Info</span>
+        <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg></span><span class="nav-label" id="nav_txt_general">General Info</span>
       </button>
 
+      <div class="nav-group-label test-suite-label">Test Suites</div>
       <!-- STATIC ISO FOLDER -->
-      <div class="nav-section-header collapsed" onclick="toggleNavGroup('group-static', this)">
-        <span id="nav_txt_static">STATIC ISO</span>
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      <div class="nav-section-header collapsed" id="nav-scope-static">
+        <button type="button" class="nav-section-link" onclick="openOverviewScope('static')"><span class="nav-suite-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="14" rx="2"></rect><path d="M8 21V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v16"></path></svg></span><span class="nav-suite-label" id="nav_txt_static">Static ISO</span><span class="badge-count">5</span></button>
+        <button type="button" class="nav-section-toggle" onclick="toggleNavGroup('group-static', this.parentElement)" aria-label="Toggle Static ISO modules" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        </button>
       </div>
       <div class="nav-group collapsed" id="group-static">
         <button class="nav-item" id="nav-lidar" onclick="switchTab('lidar')"><span class="nav-icon">LD</span><span class="nav-label">LiDAR</span></button>
@@ -41,9 +46,11 @@
       </div>
 
       <!-- DYNAMIC ISO FOLDER -->
-      <div class="nav-section-header collapsed" onclick="toggleNavGroup('group-dynamic', this)">
-        <span id="nav_txt_dynamic">DYNAMIC ISO</span>
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      <div class="nav-section-header collapsed" id="nav-scope-dynamic">
+        <button type="button" class="nav-section-link" onclick="openOverviewScope('dynamic')"><span class="nav-suite-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg></span><span class="nav-suite-label" id="nav_txt_dynamic">Dynamic ISO</span><span class="badge-count">7</span></button>
+        <button type="button" class="nav-section-toggle" onclick="toggleNavGroup('group-dynamic', this.parentElement)" aria-label="Toggle Dynamic ISO modules" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        </button>
       </div>
       <div class="nav-group collapsed" id="group-dynamic">
         <button class="nav-item" id="nav-ratedspeed" onclick="switchTab('ratedspeed')"><span class="nav-icon">RS</span><span class="nav-label">Rated speed</span></button>
@@ -56,31 +63,27 @@
       </div>
 
       <!-- ACCURACY & REPEATABILITY -->
-      <div class="nav-section-header collapsed" onclick="toggleNavGroup('group-accuracy', this)">
-        <span id="nav_txt_accuracy">ACCURACY &amp; REPEATABILITY</span>
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      <div class="nav-section-header collapsed" id="nav-scope-accuracy">
+        <button type="button" class="nav-section-link" onclick="openOverviewScope('accuracy')"><span class="nav-suite-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="5"></circle><circle cx="12" cy="12" r="1"></circle></svg></span><span class="nav-suite-label" id="nav_txt_accuracy">Accuracy &amp; Repeatability</span><span class="badge-count">2</span></button>
+        <button type="button" class="nav-section-toggle" onclick="toggleNavGroup('group-accuracy', this.parentElement)" aria-label="Toggle Accuracy modules" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        </button>
       </div>
       <div class="nav-group collapsed" id="group-accuracy">
         <button class="nav-item" id="nav-accuracylaser" onclick="switchTab('accuracylaser')"><span class="nav-icon">AL</span><span class="nav-label">Laser detection</span></button>
         <button class="nav-item" id="nav-accuracyapriltag" onclick="switchTab('accuracyapriltag')"><span class="nav-icon">AA</span><span class="nav-label">AprilTag detection</span></button>
       </div>
     </nav>
-    <button class="nav-shortcut" type="button" onclick="focusQuickSearch()" aria-label="Focus quick search"><span>/</span><div><strong>Quick search</strong><small>Press / anywhere</small></div></button>
+    <div class="sidebar-source"><span class="sidebar-source-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"></path></svg></span><div><strong>Sheets connected</strong><small>Official-ISO</small></div><span class="source-status-dot" title="Connected"></span></div>
   </aside>
 
   <!-- MAIN CONTENT WRAPPER -->
   <main class="main-content">
     
     <header class="top-header">
-      <div class="workspace-header-left">
-        <div class="header-title-wrap"><span class="header-kicker" id="headerKicker">OVERVIEW</span><h2 id="topHeaderTitle">Overview</h2></div>
-        <nav class="workspace-tabs" aria-label="ISO workspace">
-          <button type="button" class="workspace-tab active" data-workspace="overview" onclick="openWorkspace('overview')">Overview</button>
-          <button type="button" class="workspace-tab" data-workspace="static" onclick="openWorkspace('static')">Static</button>
-          <button type="button" class="workspace-tab" data-workspace="dynamic" onclick="openWorkspace('dynamic')">Dynamic</button>
-          <button type="button" class="workspace-tab" data-workspace="accuracy" onclick="openWorkspace('accuracy')">Accuracy</button>
-        </nav>
-      </div>
+      <nav class="header-breadcrumb" aria-label="Breadcrumb">
+        <span>Project</span><i aria-hidden="true">/</i><span>AC3110</span><i aria-hidden="true">/</i><strong id="topHeaderTitle">Overview</strong>
+      </nav>
       <div class="top-actions">
         <div class="header-tools" id="headerTools" style="display:none;"><input type="text" class="search-box" id="tableSearchInput" placeholder="Search..." oninput="filterData(this.value)"><button class="btn-ctrl" id="refreshBtn" onclick="confirmRefresh()"><span id="refreshBtnText">Refresh</span></button><button class="btn-action" id="addRecordBtn" onclick="openInputModal()">+ Add Record</button></div>
         <button class="btn-ctrl" onclick="toggleLanguage()">🌐 <span id="langToggleText">中文</span></button>
