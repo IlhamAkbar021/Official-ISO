@@ -2605,9 +2605,13 @@
   .base-depth-split-workspace.bd-sidebar-collapsed { grid-template-columns:0 minmax(0,1fr); }
   body.base-depth-viewport { overflow:hidden !important; }
   body.base-depth-viewport .content-scroll-area { overflow:hidden !important; min-height:0; padding:12px 16px !important; }
+  body.base-depth-viewport .content-scroll-area,
+  body.base-depth-viewport #tableContainer { min-width:0; width:100% !important; max-width:none !important; }
   body.base-depth-viewport #tableContainer { min-height:0; height:100%; overflow:hidden; display:flex; flex-direction:column; }
   body.base-depth-viewport .base-depth-module-container { height:100%; min-height:0; overflow:hidden; }
   body.base-depth-viewport .base-depth-split-workspace { min-height:0; overflow:hidden; }
+  body.base-depth-viewport .base-depth-split-workspace,
+  body.base-depth-viewport .base-depth-module-container { width:100% !important; max-width:none !important; align-self:stretch; }
   body.base-depth-viewport .base-depth-master { height:100%; min-height:0; overflow:hidden; }
   body.base-depth-viewport .base-depth-master-list { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; }
   body.base-depth-viewport .base-depth-content-grid { min-height:0; height:100%; overflow:hidden; }
@@ -2615,9 +2619,10 @@
   body.base-depth-viewport .bd-table-scroller { flex:1; min-height:0; overflow:auto; }
   body.base-depth-viewport .bd-table-scroller table td { padding:7px 10px; font-size:11.5px; }
   body.base-depth-viewport .bd-table-scroller thead th { padding:7px 10px; font-size:10.5px; position:sticky; top:0; z-index:4; }
-  .base-depth-content-grid { min-width:0; display:grid; grid-template-columns:minmax(0,1fr) 280px; gap:.75rem; }
+  .base-depth-content-grid { min-width:0; display:grid; grid-template-columns:minmax(0,1fr); gap:.75rem; width:100% !important; max-width:none !important; }
   .base-depth-content-grid { width:100%; min-width:0; box-sizing:border-box; }
-  .base-depth-content-grid > .base-depth-detail { width:100%; max-width:none; min-width:0; box-sizing:border-box; }
+  .base-depth-content-grid > .base-depth-detail { grid-column:1 / -1 !important; width:100% !important; max-width:none !important; min-width:0; box-sizing:border-box; }
+  .base-depth-content-grid > .base-depth-info-rail { display:none !important; }
   .base-depth-clean-grid, .bd-table-scroller { width:100%; min-width:0; box-sizing:border-box; }
   .bd-table-scroller table { width:100%; min-width:100%; table-layout:fixed; }
   .base-depth-info-rail { min-width:0; padding:1rem; align-self:start; position:sticky; top:.75rem; }
