@@ -184,6 +184,8 @@
   }
 
   function switchTab(tabId) {
+    // Normalize legacy navigation ids so General Info never routes to Overview.
+    if (tabId === 'generalinfo') tabId = 'general';
     if (tabId !== currentTab && inlineRecordActive) discardInlineGenericRecord();
     var sidebarSearch = document.getElementById('sidebarSearchInput');
     if (sidebarSearch && sidebarSearch.value) {
@@ -196,6 +198,10 @@
       if (tabSearch) tabSearch.value = '';
     }
     currentTab = tabId;
+    document.body.classList.toggle('base-depth-viewport', tabId === 'basedepth');
+    localStorage.setItem('active_dashboard_tab', tabId);
+    if (history.replaceState) history.replaceState(null, null, '#' + tabId);
+    else location.hash = tabId;
     if (tabId !== 'overview') syncOverviewScopeNavigation('all');
     var pageScroller = document.querySelector('.content-scroll-area');
     if (pageScroller) pageScroller.classList.toggle('lidar-table-only-scroll', tabId === 'lidar');
@@ -407,15 +413,6 @@
     if (dot) dot.className = 'sync-dot ' + currentSyncState;
   }
 
-  function renderGeneralInfoPage() {
-    return '<div class="general-info-page">' +
-      '<section class="general-hero"><div><div class="eyebrow">PRODUCT VALIDATION · AC3110 DVT</div><h1>ISO test workspace</h1><p>A single place to review robot readiness, sensor evidence, and execution results from Google Sheets.</p><div class="general-hero-meta"><span>EVT2 multi-robot validation</span><span>Google Sheets source</span><span>Static + Dynamic ISO</span></div></div>' +
-      '<div class="general-visual" aria-label="Robot test system illustration"><svg viewBox="0 0 360 210" role="img"><defs><linearGradient id="robotGlow" x1="0" x2="1"><stop stop-color="#818cf8"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs><path d="M35 172h290" stroke="#94a3b8" stroke-width="4" stroke-linecap="round"/><rect x="92" y="88" width="176" height="72" rx="18" fill="#f8fafc" stroke="#c4b5fd" stroke-width="4"/><rect x="120" y="40" width="120" height="66" rx="18" fill="#eef2ff" stroke="#a78bfa" stroke-width="4"/><circle cx="151" cy="72" r="11" fill="url(#robotGlow)"/><circle cx="209" cy="72" r="11" fill="url(#robotGlow)"/><path d="M180 40V23" stroke="#22d3ee" stroke-width="5" stroke-linecap="round"/><circle cx="180" cy="16" r="8" fill="#22c55e"/><path d="M115 124h130M115 141h78" stroke="#a5b4fc" stroke-width="7" stroke-linecap="round"/><circle cx="125" cy="174" r="19" fill="#0f172a"/><circle cx="235" cy="174" r="19" fill="#0f172a"/><path d="M48 111H88M272 111h40M53 105L35 85M307 105l18-20" stroke="#22d3ee" stroke-width="4" stroke-linecap="round"/><circle cx="29" cy="78" r="9" fill="#06b6d4"/><circle cx="331" cy="78" r="9" fill="#06b6d4"/><text x="180" y="198" text-anchor="middle" fill="#cbd5e1" font-size="10" font-family="Arial" font-weight="700">ROBOT UNDER TEST</text></svg><div class="visual-legend"><span><i class="legend-head"></i>Head depth camera</span><span><i class="legend-lidar"></i>LiDAR / IR sensors</span><span><i class="legend-base"></i>Drive base</span></div></div></section>' +
-      '<section class="general-section-grid"><article class="general-info-card"><div class="general-card-kicker static">STATIC ISO</div><h2>Sensor baseline</h2><p>Confirm perception and connectivity before motion testing.</p><div class="general-list"><div><b>LiDAR</b><span>Accuracy, tilt, distance and angle</span></div><div><b>Head / Base depth</b><span>Depth, obstacle and image evidence</span></div><div><b>IR Cliff + Wi-Fi</b><span>Cliff detection and wireless checks</span></div></div></article><article class="general-info-card"><div class="general-card-kicker dynamic">DYNAMIC ISO</div><h2>Robot behaviour</h2><p>Check how the robot behaves under controlled movement.</p><div class="general-list"><div><b>Rated speed + E-stop</b><span>Speed accuracy and stop response</span></div><div><b>Turning + cliff lower speed</b><span>Clearance, turning width and safety</span></div><div><b>Traverse + narrow corridor</b><span>Gap handling and path stability</span></div></div></article></section>' +
-      '<section class="general-bottom-grid"><article class="general-info-card"><div class="general-card-heading"><h2>Test environment</h2><span class="status-dot-label"><i></i> Target range</span></div><div class="environment-grid"><div><span>Temperature</span><b>10–30 °C</b><small>Target 25.5 °C</small></div><div><span>Humidity</span><b>0–80 %RH</b><small>Target 55 %RH</small></div><div><span>Illumination</span><b>100–1000 lux</b><small>Target 480–520 lux</small></div><div><span>Source</span><b>Google Sheets</b><small>Live workbook</small></div></div></article><article class="general-info-card"><div class="general-card-heading"><h2>Recommended workflow</h2><span class="workflow-count">4 steps</span></div><div class="workflow-list"><div><span>1</span><b>Choose robot</b><small>Start from Overview readiness.</small></div><div><span>2</span><b>Run Static ISO</b><small>Resolve sensor failures first.</small></div><div><span>3</span><b>Run Dynamic ISO</b><small>Verify motion and safety.</small></div><div><span>4</span><b>Review evidence</b><small>Open links and update records.</small></div></div></article></section>' +
-      '<div class="general-footnote">Use the left navigation to move between test groups. Green means pass, amber needs review, and red requires action.</div></div>';
-  }
-
   // Module identity lives in Modules_UI.html; shared behavior stays here.
   var DASHBOARD_MODULES = MODULE_UI_REGISTRY;
 
@@ -530,21 +527,20 @@
     setSyncState('Reading Google Sheets', 'loading');
 
     if (currentTab === 'general') {
-      container.innerHTML = renderGeneralInfoPage();
+      if (typeof getOrCreateGeneralInfoContainer === 'function') container = getOrCreateGeneralInfoContainer();
+      var overviewLayout = document.getElementById('overviewLayout');
+      if (overviewLayout) overviewLayout.style.display = 'none';
+      document.querySelectorAll('.overview-command-bar, .overview-view-panel').forEach(function(el) { el.style.display = 'none'; });
+      if (container) {
+        container.style.display = 'block';
+        container.style.visibility = 'visible';
+        container.style.opacity = '1';
+        container.innerHTML = '<div class="panel-card smart-table-card general-info-clean-card"><div class="general-info-clean-header"><span class="eyebrow">ISO REFERENCE</span><h1>General Info &amp; Standards</h1></div><div class="gi-grid"><article class="gi-card"><div class="gi-img-wrap"><span class="gi-unavailable">Mind Map of ISO Test</span></div><div class="gi-info"><strong>Mind Map of ISO Test</strong><small>Test dependencies and structure</small></div></article><article class="gi-card"><div class="gi-img-wrap"><span class="gi-unavailable">EVT2 Testing Process / Structure</span></div><div class="gi-info"><strong>EVT2 Testing Process / Structure</strong><small>Workflow and factory validation</small></div></article><article class="gi-card"><div class="gi-img-wrap"><span class="gi-unavailable">Test Station Layout</span></div><div class="gi-info"><strong>Test Station Layout</strong><small>Physical room arrangement</small></div></article><article class="gi-card"><div class="gi-img-wrap"><span class="gi-unavailable">Robot LU Definition &amp; Pose</span></div><div class="gi-info"><strong>Robot LU Definition &amp; Pose</strong><small>LU = ⌈w/500⌉ × 500 mm</small></div></article></div></div>';
+      }
+      try { if (typeof renderGeneralInfoShell === 'function') renderGeneralInfoShell(container); } catch (shellError) {}
+      try { if (typeof loadGeneralInfoFast === 'function') loadGeneralInfoFast(requestId); } catch (loadError) {}
       setSyncState('Specification ready', 'ready');
-      google.script.run.withSuccessHandler(renderGeneralInfoImages).withFailureHandler(function() {}).getGeneralInfoImages();
       return;
-    }
-
-    function renderGeneralInfoImages(response) {
-      if (!response || !response.success || !response.images || !response.images.length) return;
-      var page = document.querySelector('.general-info-page');
-      if (!page) return;
-      var html = '<section class="general-sheet-images"><div class="general-card-heading"><h2>Reference images</h2><span class="status-dot-label"><i></i>' + escapeHtml(response.sheetName || 'Google Sheets') + '</span></div><div class="general-sheet-image-grid">';
-      response.images.forEach(function(item) {
-        html += '<figure class="general-sheet-image"><div>' + renderImageCell(item.value, item.header, item.row, item.column, item.sheetName) + '</div><figcaption>' + escapeHtml(item.header) + '<small>Row ' + item.row + '</small></figcaption></figure>';
-      });
-      page.insertAdjacentHTML('beforeend', html + '</div></section>');
     }
 
     // Render the last successful response immediately. The server request
@@ -633,6 +629,19 @@
       '<div class="panel-card skeleton-table"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-body"></div></div>';
   }
 
+  function getModulePurpose(moduleKey, fallback) {
+    var purposes = {
+      lidar: 'To evaluate 360-degree laser range accuracy, distance linearity, and sensor tilt alignment across target distances.',
+      cliff: 'To test bottom infrared cliff sensor thresholds, drop-off boundary detection, and anti-fall safety triggers.',
+      wifi: 'To evaluate signal attenuation, RSSI stability, and throughput performance across variable indoor distances.',
+      basedepth: 'To evaluate obstacle detection capability and distance measurement precision of the lower depth sensor across standard hurdle heights (3cm, 2.5cm, 2cm).',
+      headdepth: 'To find out how head depth cam detection works with a flat surface and evaluate detection distance limits.',
+      traversegap: 'To assess dynamic mobility, threshold crossing, obstacle clearance, and gap traversal reliability under active drive commands.',
+      accuracy: 'To measure statistical variance, positioning repeatability, and sensor error distribution over cyclic multi-run trials.'
+    };
+    return purposes[moduleKey] || fallback || 'To validate ISO test performance and measurement behavior for this module.';
+  }
+
   function renderSmartModule(response) {
     var container = document.getElementById('tableContainer');
     if (!response || !response.success) {
@@ -692,11 +701,7 @@
       return;
     }
     var compactFlatModule = response.key === 'cliff';
-    // Keep the module title, sheet source, purpose and records in one clean
-    // panel. The old hero repeated “DATA TABLE / Reading …” above it.
-    var html = '<div class="panel-card smart-table-card"><div class="panel-header"><div><div class="eyebrow">DATA EXPLORER</div><h1 class="module-panel-title">' + escapeHtml(response.title) + '</h1>' +
-      (response.key === 'headdepth' && response.purpose ? '<p class="module-purpose"><strong>Purpose</strong><span>' + escapeHtml(response.purpose) + '</span></p>' : '') + '</div>' +
-      '<span class="record-count">' + rows.length + (searchQuery ? ' matched' : ' rows') + '</span></div>';
+    var html = '<div class="panel-card smart-table-card"><div class="module-unified-hero"><div class="hero-left"><span class="eyebrow">DATA EXPLORER</span><h1 class="hero-title">' + escapeHtml(response.title) + '</h1><p class="hero-purpose"><strong>PURPOSE</strong><span>' + escapeHtml(getModulePurpose(response.key, response.purpose)) + '</span></p></div><div class="hero-actions"><span class="hero-badge-count">' + rows.length + (searchQuery ? ' matched' : ' rows') + '</span></div></div>';
 
     if (!response.headers.length || !rows.length) {
       html += '<div class="smart-empty compact"><h3>' + (searchQuery ? 'No matching records' : 'No data rows yet') + '</h3><p>' + (searchQuery ? 'Try a different Robot ID, tester, status, or value.' : 'The sheet is connected and ready for new records.') + '</p></div>';
@@ -750,7 +755,7 @@
       else groups.other.push(item.row);
     });
     var groupLabels = [{ key:'front', label:'Front IR', description:'Front cliff sensor tests' }, { key:'rear', label:'Rear IR', description:'Rear cliff sensor tests' }, { key:'other', label:'Other IR', description:'Rows without a Front/Rear label' }];
-    var html = '<section class="module-hero compact-module-hero"><div><div class="eyebrow">SENSOR TABLE</div><h1>IR Cliff</h1><p>Front and rear cliff tests grouped for quick review</p></div><div class="module-health"><span class="health-pulse"></span> Connected</div></section>';
+    var html = '<div class="module-unified-hero"><div class="hero-left"><span class="eyebrow">DATA EXPLORER</span><h1 class="hero-title">IR Cliff</h1><p class="hero-purpose"><strong>PURPOSE</strong><span>' + escapeHtml(getModulePurpose('cliff')) + '</span></p></div><div class="hero-actions"><span class="hero-badge-count">' + rows.length + ' rows</span></div></div>';
     html += '<div class="ir-cliff-table-card"><div class="ir-cliff-table-note"><strong>' + rows.length + ' records</strong><span>Open a section to inspect its tests.</span></div>';
     groupLabels.forEach(function(group) {
       var groupRows = groups[group.key];
@@ -1508,7 +1513,7 @@
     var hideFirstCol = (response.headers[0] === '#' || response.headers[0].trim() === '');
     var startIndex = hideFirstCol ? 1 : 0;
 
-    var html = '<div class="panel-card"><div class="panel-header"><h2>Wi-Fi Distance & Antenna Diversity</h2></div><div class="table-scroller"><table><thead><tr>';
+    var html = '<div class="panel-card smart-table-card"><div class="module-unified-hero"><div class="hero-left"><span class="eyebrow">DATA EXPLORER</span><h1 class="hero-title">Wi-Fi Distance &amp; Antenna Diversity</h1><p class="hero-purpose"><strong>PURPOSE</strong><span>' + escapeHtml(getModulePurpose('wifi')) + '</span></p></div><div class="hero-actions"><span class="hero-badge-count">' + (response.rows || []).length + ' rows</span></div></div><div class="table-scroller"><table><thead><tr>';
     for (var i = startIndex; i < response.headers.length; i++) {
       html += '<th>' + (response.headers[i] || '-') + '</th>';
     }
@@ -1552,8 +1557,8 @@
       return !searchQuery || item.robotId.toLowerCase().indexOf(searchQuery) !== -1 || item.tester.toLowerCase().indexOf(searchQuery) !== -1;
     });
     var recordCount = isAccuracy ? visibleAccuracy.length : tiltRows.length;
-    var html = '<div class="lidar-inspection-page">' + renderLidarKpiStrip(summary) +
-      '<div class="panel-card lidar-panel lidar-inspection-card"><div class="lidar-sheet-header"><div><strong>' + (isAccuracy ? 'LiDAR Accuracy Inspection' : 'LiDAR Tilt & Angle Inspection') + '</strong><span>' + recordCount + ' unit' + (recordCount === 1 ? '' : 's') + ' · ' + (isAccuracy ? 'ISO tolerance ±0.05 m' : 'Calibration geometry and tilt direction') + '</span></div><span class="lidar-view-badge">' + (isAccuracy ? 'Accuracy' : 'Tilt') + '</span></div><div class="table-scroller lidar-table-scroll">';
+    var html = '<div class="lidar-inspection-page"><div class="panel-card smart-table-card lidar-card lidar-panel lidar-inspection-card">' +
+      '<div class="module-unified-hero"><div class="hero-left"><span class="eyebrow">DATA EXPLORER</span><h1 class="hero-title">' + (isAccuracy ? 'LiDAR Accuracy Inspection' : 'LiDAR Tilt &amp; Angle Inspection') + '</h1><p class="hero-purpose"><strong>PURPOSE</strong><span>' + escapeHtml(getModulePurpose('lidar')) + '</span></p></div><div class="hero-actions"><span class="hero-badge-count">' + recordCount + ' units</span></div></div>' + renderLidarKpiStrip(summary) + '<div class="table-scroller lidar-table-scroll">';
 
     if (isAccuracy) {
       html += '<table class="lidar-table lidar-accuracy-table lidar-inspection-table"><colgroup><col class="lidar-id-col"><col class="lidar-release-col"><col class="lidar-tester-col"><col class="lidar-measure-col"><col class="lidar-measure-col"><col class="lidar-measure-col"><col class="lidar-action-col"></colgroup><thead><tr><th>Robot ID</th><th>Software / Date</th><th>Tester</th><th>Target 5 m</th><th>Target 10 m</th><th>Target 15 m</th><th>' + t('actions') + '</th></tr></thead><tbody>';
@@ -1672,7 +1677,7 @@
   }
 
   function renderLidarKpiStrip(summary) {
-    return '<section class="lidar-kpi-strip" aria-label="LiDAR inspection summary"><article><span>Total Units</span><strong>' + summary.totalUnits + '</strong><small>Registered in this module</small></article><article><span>Max Range Error</span><strong>' + (summary.maxError === null ? '—' : summary.maxError.toFixed(2) + ' m') + '</strong><small>Across 5 m, 10 m and 15 m</small></article><article><span>Calibration Pass Rate</span><strong class="' + (summary.passRate === null ? 'is-empty' : 'is-pass') + '">' + (summary.passRate === null ? '—' : summary.passRate.toFixed(1) + '%') + '</strong><small>' + summary.sampleCount + ' range samples</small></article></section>';
+    return '<section class="lidar-internal-kpi-strip" aria-label="LiDAR inspection summary"><article class="kpi-mini-card"><span>Total Units</span><strong>' + summary.totalUnits + '</strong><small>Registered in this module</small></article><article class="kpi-mini-card"><span>Max Range Error</span><strong>' + (summary.maxError === null ? '—' : summary.maxError.toFixed(2) + ' m') + '</strong><small>Across 5 m, 10 m and 15 m</small></article><article class="kpi-mini-card"><span>Calibration Pass Rate</span><strong class="' + (summary.passRate === null ? 'is-empty' : 'is-pass') + '">' + (summary.passRate === null ? '—' : summary.passRate.toFixed(1) + '%') + '</strong><small>' + summary.sampleCount + ' range samples</small></article></section>';
   }
 
   function groupLidarAccuracyPivoted(rows) {
@@ -2229,7 +2234,9 @@
     toggleSidebarRail(localStorage.getItem('iso_sidebar_rail') === '1');
     collapseAllNavGroups();
     updateNavSuiteCounts();
-    var lastTab = localStorage.getItem('last_iso_tab');
+    var hashTab = (location.hash || '').replace(/^#/, '');
+    var lastTab = hashTab || localStorage.getItem('active_dashboard_tab') || localStorage.getItem('last_iso_tab');
+    if (lastTab === 'generalinfo') lastTab = 'general';
     switchTab(document.getElementById('nav-' + lastTab) ? lastTab : 'overview');
     window.setInterval(updateSyncRelativeLabel, 5000);
     document.querySelectorAll('.nav-item').forEach(function(item) {

@@ -174,7 +174,61 @@ function getIsoImageData(payload) {
 }
 
 /** Read image cells from the General/Specification information sheet. */
+function extractGeneralInfoImageAsBase64_(sheet, cellA1) {
+  try {
+    var range = sheet.getRange(cellA1);
+    var value = range.getValue();
+    var formula = range.getFormula();
+    var targetUrl = null;
+    if (formula && formula.toUpperCase().indexOf('=IMAGE') !== -1) {
+      var match = formula.match(/"([^"]+)"/);
+      if (match && match[1]) targetUrl = match[1];
+    } else if (typeof value === 'string' && value.indexOf('http') === 0) {
+      targetUrl = value;
+    } else if (value && typeof value === 'object' && typeof value.getContentUrl === 'function') {
+      targetUrl = value.getContentUrl();
+    }
+    if (targetUrl) {
+      var attempts = [{ muteHttpExceptions:true, followRedirects:true, headers:{ Authorization:'Bearer ' + ScriptApp.getOAuthToken() } }, { muteHttpExceptions:true, followRedirects:true }];
+      for (var attempt = 0; attempt < attempts.length; attempt++) {
+        var response = UrlFetchApp.fetch(targetUrl, attempts[attempt]);
+        if (response.getResponseCode() >= 200 && response.getResponseCode() < 300) {
+          var blob = response.getBlob();
+          if (String(blob.getContentType() || '').indexOf('image/') === 0) return 'data:' + blob.getContentType() + ';base64,' + Utilities.base64Encode(blob.getBytes());
+        }
+      }
+    }
+    if (typeof sheet.getImages === 'function') {
+      var targetRow = range.getRow(), targetCol = range.getColumn();
+      var images = sheet.getImages();
+      for (var i = 0; i < images.length; i++) {
+        var anchor = images[i].getAnchorCell();
+        if ((anchor.getRow() === targetRow || (anchor.getRow() >= targetRow - 1 && anchor.getRow() <= targetRow + 1)) && anchor.getColumn() === targetCol) {
+          var imageBlob = images[i].getBlob();
+          return 'data:' + (imageBlob.getContentType() || 'image/png') + ';base64,' + Utilities.base64Encode(imageBlob.getBytes());
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error extracting image from ' + cellA1 + ':', error);
+  }
+  return null;
+}
+
+function getGeneralInfoData() {
+  if (typeof getGeneralInfoDataV2 === 'function') return getGeneralInfoDataV2();
+  var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
+  var sheet = ss.getSheetByName('General info') || ss.getSheetByName('General Info');
+  if (!sheet) return { success:false, error:'General info sheet not found.' };
+  return {
+    success:true,
+    testStation:{ title:'Test Station Layout', imageBase64:extractGeneralInfoImageAsBase64_(sheet, 'B5'), note:sheet.getRange('C5').getDisplayValue() || 'Details arrangement as link' },
+    robotLu:{ title:'Robot LU Definition & Pose Dimensions', imageBase64:extractGeneralInfoImageAsBase64_(sheet, 'B6'), formula:'LU = ⌈w / 500⌉ × 500 mm', dimensions:sheet.getRange('C7').getDisplayValue() || '1.17 m x 0.56 m x 0.56 m (H x W x L)' }
+  };
+}
+
 function getGeneralInfoImages() {
+  if (typeof getGeneralInfoDataV2 === 'function') return getGeneralInfoDataV2();
   try {
     var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
     var preferred = ['General Info', 'General Information', 'Specification', 'Factory Info', 'Environment'];
@@ -202,10 +256,10 @@ function getGeneralInfoImages() {
       sheet.getImages().forEach(function(floatingImage, imageIndex) {
         try {
           var anchor = floatingImage.getAnchorCell();
-          var sourceUrl = typeof floatingImage.getUrl === 'function' ? floatingImage.getUrl() : '';
-          if (!sourceUrl) return;
+          var blob = floatingImage.getBlob();
+          var imageBase64 = 'data:' + (blob.getContentType() || 'image/png') + ';base64,' + Utilities.base64Encode(blob.getBytes());
           images.push({
-            value: sourceUrl,
+            value: imageBase64,
             header: 'Reference image ' + (imageIndex + 1),
             row: anchor.getRow(),
             column: anchor.getColumn(),
@@ -233,7 +287,16 @@ function getGeneralInfoImages() {
         });
       }
     }
-    return { success: true, sheetName: sheet.getName(), images: images };
+    var station = images.filter(function(item) { return item.row >= 4 && item.row <= 5; })[0] || null;
+    var robotLu = images.filter(function(item) { return item.row >= 6 && item.row <= 7; })[0] || null;
+    var structured = getGeneralInfoData();
+    return {
+      success: true,
+      sheetName: sheet.getName(),
+      images: images,
+      testStation: structured.testStation.imageBase64 ? structured.testStation : { title:'Test Station Layout', category:'Factory Floor & Test Zones', imageBase64:station ? station.value : null, note:sheet.getRange('C5').getDisplayValue() || 'Details arrangement as link' },
+      robotLu: structured.robotLu.imageBase64 ? structured.robotLu : { title:'Robot LU Definition & Pose Dimensions', category:'Physical Robot Specifications', imageBase64:robotLu ? robotLu.value : null, formula:'LU = ⌈w / 500⌉ × 500 mm', dimensions:sheet.getRange('C7').getDisplayValue() || '1.17 m x 0.56 m x 0.56 m (H x W x L)' }
+    };
   } catch (err) {
     return { success: false, error: err.toString(), images: [] };
   }

@@ -1,0 +1,85 @@
+<script>
+  function giEscape(value) {
+    return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function getOrCreateGeneralInfoContainer() {
+    var existing = document.getElementById('generalInfoView');
+    if (existing) { existing.id = 'tableContainer'; return existing; }
+    var table = document.getElementById('tableContainer');
+    // Keep the shared id intact; all other module renderers depend on it.
+    if (table) return table;
+    var parent = document.querySelector('.content-scroll-area') || document.querySelector('main') || document.body;
+    var view = document.createElement('div');
+    view.id = 'generalInfoView';
+    view.style.cssText = 'display:block;visibility:visible;opacity:1;width:100%;box-sizing:border-box;';
+    parent.appendChild(view);
+    return view;
+  }
+  function renderGeneralInfoShell(container) {
+    container = container || document.getElementById('tableContainer');
+    if (!container) return;
+    container.style.display = 'block';
+    container.style.visibility = 'visible';
+    container.style.opacity = '1';
+    renderGeneralInfoPage({ success: true, items: [
+      { title: 'Mind Map of ISO Test', note: 'Test dependencies and structure' },
+      { title: 'EVT2 Testing Process / Structure', note: 'Workflow and factory validation' },
+      { title: 'Test Station Layout', note: 'Physical room arrangement' },
+      { title: 'Robot LU Definition & Pose', note: 'LU = ⌈w/500⌉ × 500 mm | 1.17 m x 0.56 m x 0.56 m' }
+    ] });
+  }
+
+  function showGeneralInfoSkeleton() {
+    var container = getOrCreateGeneralInfoContainer();
+    if (!container) return;
+    container.innerHTML = '<div class="panel-card smart-table-card general-info-clean-card"><div class="general-info-clean-header"><span class="eyebrow">ISO REFERENCE</span><h1>General Info &amp; Standards</h1></div><div class="gi-grid"><div class="gi-skeleton"></div><div class="gi-skeleton"></div><div class="gi-skeleton"></div><div class="gi-skeleton"></div></div></div>';
+  }
+
+  function loadGeneralInfoFast(viewRequestId) {
+    var main = document.getElementById('tableContainer') || document.querySelector('main');
+    renderGeneralInfoShell(main && main.id === 'tableContainer' ? main : document.getElementById('tableContainer'));
+    var fallback = { success: true, items: [
+      { id: 'mindmap', title: 'Mind Map of ISO Test', note: 'Test dependencies and structure' },
+      { id: 'process', title: 'EVT2 Testing Process / Structure', note: 'Workflow and factory validation' },
+      { id: 'station', title: 'Test Station Layout', note: 'Physical room arrangement' },
+      { id: 'robot', title: 'Robot LU Definition & Pose', note: 'LU = ⌈w/500⌉ × 500 mm | 1.17 m x 0.56 m x 0.56 m' }
+    ] };
+    try {
+      var cached = localStorage.getItem('cache_general_info');
+      if (cached) renderGeneralInfoPage(JSON.parse(cached));
+      else renderGeneralInfoPage(fallback);
+    } catch (e) { renderGeneralInfoPage(fallback); }
+    try {
+      google.script.run.withSuccessHandler(function(response) {
+        if (typeof currentTab !== 'undefined' && currentTab !== 'general') return;
+        if (typeof viewRequestId === 'number' && typeof loadRequestId === 'number' && viewRequestId !== loadRequestId) return;
+        if (response && response.success && response.items) {
+          try { localStorage.setItem('cache_general_info', JSON.stringify(response)); } catch (cacheError) {}
+          renderGeneralInfoPage(response);
+        }
+      }).withFailureHandler(function() {}).getGeneralInfoData();
+    } catch (requestError) {}
+  }
+
+  function renderGeneralInfoPage(response) {
+    var data = response && response.data ? response.data : (response || {});
+    var items = data.items || [];
+    var html = '<div class="panel-card smart-table-card general-info-clean-card"><div class="general-info-clean-header"><span class="eyebrow">ISO REFERENCE</span><h1>General Info &amp; Standards</h1></div><div class="gi-grid">';
+    items.forEach(function(item) {
+      var image = item.img ? '<img src="' + giEscape(item.img) + '" alt="' + giEscape(item.title) + '">' : '<span class="gi-unavailable">Image unavailable</span>';
+      var click = item.img ? ' onclick="openSheetImagePreview(\'' + giEscape(item.img).replace(/'/g, '%27') + '\',\'' + giEscape(item.title).replace(/'/g, '%27') + '\')"' : '';
+      var note = giEscape(item.note || '');
+      if (item.link && (item.link.indexOf('http://') === 0 || item.link.indexOf('https://') === 0)) note += ' <a class="gi-link" href="' + giEscape(item.link) + '" target="_blank" rel="noopener">Open link ↗</a>';
+      html += '<article class="gi-card"><div class="gi-img-wrap"' + click + '>' + image + '</div><div class="gi-info"><strong>' + giEscape(item.title) + '</strong><small>' + note + '</small></div></article>';
+    });
+    if (!items.length) html += '<div class="gi-empty">No reference images available.</div>';
+    html += '</div></div>';
+    var container = getOrCreateGeneralInfoContainer();
+    if (container) container.innerHTML = html;
+    return html;
+  }
+  function renderGeneralInfoImages(response) {
+    var container = getOrCreateGeneralInfoContainer();
+    if (container) container.innerHTML = renderGeneralInfoPage(response);
+  }
+</script>

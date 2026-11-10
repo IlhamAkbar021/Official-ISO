@@ -13,8 +13,6 @@
     imageColumns: ['image', 'photo', 'picture', 'screenshot', 'evidence', 'capture', 'camera']
   };
 
-  // Temporary hardcoded test image supplied from the Head Depth sheet.
-  // Replace this with one URL per robot/row after confirming the panel flow.
   var HEAD_DEPTH_TEST_IMAGE_URL = 'https://docs.google.com/sheets-images-rt/AO43MLY1FuBYlV_FczxsgikPDPlfZoskfBRVIhWpUvSwLBhTwMSHSI2WuUkulZWvCepa-de9n2HqZh7PjcIHAfjMxfnyJ5gI0Oj5gX2xtjl1PuUpJIQ0OasPSgdh9PgeHThfG3NIIE-7QeZmDlAM7VEIPLJudfWV5P9ns-tF6VL9ODCBOx-b=s2048?key=kCny20RQM5-9zoEAfSXBfw';
 
   function isHeadDepthModule(moduleKey) {
@@ -37,13 +35,38 @@
     return Object.keys(values).sort();
   }
 
-  function renderHeadDepthImageValue(value, label) {
-    var text = String(value || '').trim();
-    if (!text) return '<span class="empty-cell">—</span>';
-    if (/^https?:\/\//i.test(text) || /^data:image\//i.test(text)) {
-      return '<a class="head-depth-image-value" href="' + escapeHtml(text) + '" target="_blank" rel="noopener" title="Open ' + escapeHtml(label) + '"><img src="' + escapeHtml(text) + '" alt="' + escapeHtml(label) + '" loading="lazy" onerror="this.style.display=\'none\'"><span>↗</span></a>';
+  function isValidUrl(val) {
+    return typeof val === 'string' && (val.startsWith('http://') || val.startsWith('https://') || val.startsWith('data:image/'));
+  }
+
+  function openHeadDepthLightbox(src) {
+    if (!src) return;
+    var modal = document.getElementById('imagePreviewModal');
+    if (modal) {
+      var img = modal.querySelector('.image-preview-stage img');
+      if (img) img.src = src;
+      modal.style.display = 'flex';
+    } else {
+      var w = window.open('', '_blank', 'width=800,height=600,menubar=no,toolbar=no');
+      if (w) {
+        w.document.write('<body style="margin:0;background:#0f172a;display:flex;justify-content:center;align-items:center;height:100vh;"><img src="' + src + '" style="max-width:95%;max-height:95%;border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,0.5)"></body>');
+      }
     }
-    return escapeHtml(text);
+  }
+
+  function renderThumb(base64Data) {
+    var text = String(base64Data || '').trim();
+    if (!text.startsWith('data:image')) {
+      if (text.startsWith('http')) {
+        return '<div class="thumb-cell"><a class="data-link" href="' + escapeHtml(text) + '" target="_blank" rel="noopener">Link ↗</a></div>';
+      }
+      return '<span style="color:#CBD5E1">-</span>';
+    }
+    return '<div class="thumb-cell"><img src="' + text + '" class="depth-thumbnail" alt="Depth Map" onclick="openHeadDepthLightbox(this.src)" title="Click to enlarge"></div>';
+  }
+
+  function renderHeadDepthImageValue(value, label) {
+    return renderThumb(value);
   }
 
   function renderHeadDepthSmartTable(response, filteredRows) {
@@ -55,7 +78,6 @@
       rows.sort(function(a, b) { return a.originalIndex === recentIndex ? -1 : (b.originalIndex === recentIndex ? 1 : 0); });
     }
     var order = getHeadDepthColumnOrder();
-    var headers = response.headers || [];
     var labels = ['Robot ID','Date','SW Version','Temp C','Humidity %','Luminosity Lux','Tester','0.3m','0.5m Image','1.0m Image','Shrink Distance (m)','Totally Undetected (m)','Pass/Fail','Note / Link'];
     var html = '<div class="panel-card smart-table-card head-depth-smart-card"><div class="panel-header"><div><div class="eyebrow">DATA EXPLORER</div><h1 class="module-panel-title">Head Depth Camera</h1>' + (response.purpose ? '<p class="module-purpose"><strong>Purpose</strong><span>' + escapeHtml(response.purpose) + '</span></p>' : '') + '</div><span class="record-count">' + rows.length + ' rows</span></div><div class="table-scroller head-depth-smart-scroll"><table class="smart-table head-depth-smart-table"><thead><tr>';
     labels.forEach(function(label) { html += '<th>' + escapeHtml(label) + '</th>'; });
@@ -66,7 +88,7 @@
       var sourceRow = headerRow + 1 + item.originalIndex;
       var robot = row[order.robot] || '—';
       html += '<tr data-head-depth-row="' + sourceRow + '" data-robot-id="' + escapeHtml(robot) + '">';
-      html += '<td class="identity-cell"><strong>' + escapeHtml(robot) + '</strong></td><td>' + escapeHtml(row[order.date] || '—') + '</td><td>' + escapeHtml(row[order.sw] || '—') + '</td><td>' + escapeHtml(row[order.temp] || '—') + '</td><td>' + escapeHtml(row[order.humidity] || '—') + '</td><td>' + escapeHtml(row[order.lux] || '—') + '</td><td>' + escapeHtml(row[order.tester] || '—') + '</td><td>' + escapeHtml(row[order.point03] || '—') + '</td><td>' + renderHeadDepthImageValue(row[order.image05], labels[order.image05]) + '</td><td>' + renderHeadDepthImageValue(row[order.image10], labels[order.image10]) + '</td><td>' + escapeHtml(row[order.shrink] || '—') + '</td><td>' + escapeHtml(row[order.undetected] || '—') + '</td><td>' + renderStatusBadge(row[order.status] || 'Pass') + '</td><td>' + (row[order.note] ? (/^https?:\/\//i.test(String(row[order.note])) ? '<a class="data-link" href="' + escapeHtml(row[order.note]) + '" target="_blank" rel="noopener">Open ↗</a>' : escapeHtml(row[order.note])) : '<span class="empty-cell">—</span>') + '</td><td class="module-action-cell">' + renderGenericActionDropdown('headdepth', sourceRow) + '</td></tr>';
+      html += '<td class="identity-cell"><strong>' + escapeHtml(robot) + '</strong></td><td>' + escapeHtml(row[order.date] || '—') + '</td><td>' + escapeHtml(row[order.sw] || '—') + '</td><td>' + escapeHtml(row[order.temp] || '—') + '</td><td>' + escapeHtml(row[order.humidity] || '—') + '</td><td>' + escapeHtml(row[order.lux] || '—') + '</td><td>' + escapeHtml(row[order.tester] || '—') + '</td><td>' + escapeHtml(row[order.point03] || '—') + '</td><td>' + renderHeadDepthImageValue(row[order.image05], labels[order.image05]) + '</td><td>' + renderHeadDepthImageValue(row[order.image10], labels[order.image10]) + '</td><td>' + escapeHtml(row[order.shrink] || '—') + '</td><td>' + escapeHtml(row[order.undetected] || '—') + '</td><td>' + renderStatusBadge(row[order.status] || 'Pass') + '</td><td>' + (row[order.note] ? (isValidUrl(String(row[order.note])) ? '<a class="data-link" href="' + escapeHtml(row[order.note]) + '" target="_blank" rel="noopener">Open ↗</a>' : escapeHtml(row[order.note])) : '<span class="empty-cell">—</span>') + '</td><td class="module-action-cell">' + renderGenericActionDropdown('headdepth', sourceRow) + '</td></tr>';
     });
     container.innerHTML = html + '</tbody></table></div></div>';
     setSyncState('Synced ' + response.updatedAt, 'ready');
@@ -91,7 +113,7 @@
     var preview = document.getElementById(id);
     if (!preview) return;
     var url = String(value || '').trim();
-    preview.innerHTML = /^https?:\/\//i.test(url) || /^data:image\//i.test(url) ? '<img src="' + escapeHtml(url) + '" alt="Image preview" onerror="this.parentElement.innerHTML=\'<span>Preview unavailable</span>\'">' : '<span>Paste a valid image URL to preview</span>';
+    preview.innerHTML = isValidUrl(url) ? '<img src="' + escapeHtml(url) + '" alt="Image preview" onerror="this.parentElement.innerHTML=\'<span>Preview unavailable</span>\'">' : '<span>Paste a valid image URL to preview</span>';
   }
 
   function setHeadDepthStatus(value) {
@@ -110,7 +132,7 @@
     var lastTester = localStorage.getItem('last_headdepth_tester') || headDepthUniqueValues(rows, order.tester)[0] || '';
     var lastSw = localStorage.getItem('last_headdepth_sw') || headDepthUniqueValues(rows, order.sw)[0] || '';
     var now = new Date();
-    var today = now.getFullYear() + '/' + String(now.getMonth() + 1).padStart(2, '0') + '/' + String(now.getDate()).padStart(2, '0');
+    var today = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
     var modal = ensureHeadDepthRecordModal();
     modal.innerHTML = '<div class="head-depth-record-panel table-card" role="dialog" aria-modal="true" aria-labelledby="headDepthRecordTitle"><header><div><span>SMART DATA ENTRY</span><h3 id="headDepthRecordTitle">Add Head Depth Camera Record</h3><p>Paste a 14-column sheet row or enter the environment and measurement values.</p></div><button type="button" onclick="closeHeadDepthRecordModal()" aria-label="Close">×</button></header><form id="headDepthRecordForm" onsubmit="submitHeadDepthRecord(event)"><div class="head-depth-entry-grid"><section><h4>Meta &amp; Environment</h4><label><span>Robot ID</span><select id="hd_robot" required>' + headDepthSelectOptions(robots,lastRobot) + '</select></label><label><span>Date</span><input id="hd_date" value="' + today + '" required></label><label><span>SW Version</span><input id="hd_sw" list="headDepthSwList" value="' + escapeHtml(lastSw) + '" required><datalist id="headDepthSwList">' + headDepthSelectOptions(headDepthUniqueValues(rows,order.sw),'') + '</datalist></label><label><span>Tester</span><input id="hd_tester" list="registeredTesterList" value="' + escapeHtml(lastTester) + '" required></label><label><span>Temp C</span><input id="hd_temp" type="number" step="0.1"></label><label><span>Humidity %</span><input id="hd_humidity" type="number" step="0.1"></label><label><span>Luminosity Lux</span><input id="hd_lux"></label></section><section><h4>Measurements</h4><label><span>0.3m</span><input id="hd_point03" value="undetected"></label><label><span>0.5m Image URL</span><input id="hd_image05" oninput="updateHeadDepthImagePreview(\'hd_preview05\',this.value)"><div id="hd_preview05" class="head-depth-url-preview"><span>Paste a valid image URL to preview</span></div></label><label><span>1.0m Image URL</span><input id="hd_image10" oninput="updateHeadDepthImagePreview(\'hd_preview10\',this.value)"><div id="hd_preview10" class="head-depth-url-preview"><span>Paste a valid image URL to preview</span></div></label><div class="head-depth-two-fields"><label><span>Shrink Distance (m)</span><input id="hd_shrink" type="number" step="0.001"></label><label><span>Totally Undetected (m)</span><input id="hd_undetected" type="number" step="0.001"></label></div><label><span>Status</span><div class="head-depth-status-toggle"><button type="button" data-value="Pass" class="active" onclick="setHeadDepthStatus(\'Pass\')">Pass</button><button type="button" data-value="Fail" onclick="setHeadDepthStatus(\'Fail\')">Fail</button><input id="hd_status" type="hidden" value="Pass"></div></label><label><span>Note / Link</span><input id="hd_note"></label></section></div><div class="head-depth-paste-strip"><strong>Ctrl + V ready</strong><span>Tab-separated order: Robot, Date, SW, Temp, Humidity, Lux, Tester, 0.3m, 0.5m, 1.0m, Shrink, Undetected, Status, Note</span></div><footer><span>14 columns will be appended to the Head Depth sheet</span><button type="button" class="btn-ctrl" onclick="closeHeadDepthRecordModal()">Cancel</button><button type="submit" class="btn-action" id="headDepthSaveButton">Save Record</button></footer></form></div>';
     modal.style.display = 'flex';
@@ -142,12 +164,15 @@
     var text = event.clipboardData && event.clipboardData.getData ? event.clipboardData.getData('text/plain') : '';
     if (!text || text.indexOf('\t') === -1) return;
     var cells = parseHeadDepthPaste(text);
-    if (cells.length < 10) return;
+    if (cells.length < 14) return;
     event.preventDefault();
     applyHeadDepthPaste(cells);
     var toast = document.getElementById('copyToast');
-    toast.innerHTML = '<span style="color:#34d399;font-weight:800;">✓</span><span>Head Depth row mapped</span>';
-    toast.style.display = 'flex'; setTimeout(function() { toast.style.display = 'none'; }, 1800);
+    if (toast) {
+      toast.innerHTML = '<span style="color:#34d399;font-weight:800;">✓</span><span>Head Depth row mapped</span>';
+      toast.style.display = 'flex';
+      setTimeout(function() { toast.style.display = 'none'; }, 1800);
+    }
   });
 
   function submitHeadDepthRecord(event) {
@@ -156,17 +181,35 @@
     if (form.reportValidity && !form.reportValidity()) return;
     var fields = ['hd_robot','hd_date','hd_sw','hd_temp','hd_humidity','hd_lux','hd_tester','hd_point03','hd_image05','hd_image10','hd_shrink','hd_undetected','hd_status','hd_note'];
     var values = fields.map(function(id) { var field = document.getElementById(id); return field ? field.value.trim() : ''; });
-    localStorage.setItem('last_headdepth_robot', values[0]); localStorage.setItem('last_headdepth_sw', values[2]); localStorage.setItem('last_headdepth_tester', values[6]);
-    var button = document.getElementById('headDepthSaveButton'); button.disabled = true; button.innerText = 'Saving…';
+    localStorage.setItem('last_headdepth_robot', values[0]);
+    localStorage.setItem('last_headdepth_sw', values[2]);
+    localStorage.setItem('last_headdepth_tester', values[6]);
+    var button = document.getElementById('headDepthSaveButton');
+    button.disabled = true;
+    button.innerText = 'Saving…';
     google.script.run.withSuccessHandler(function(response) {
-      button.disabled = false; button.innerText = 'Save Record';
-      if (!response || !response.success) { handleFail(response && response.error ? response.error : 'Head Depth save failed.'); return; }
+      button.disabled = false;
+      button.innerText = 'Save Record';
+      if (!response || !response.success) {
+        handleFail(response && response.error ? response.error : 'Head Depth save failed.');
+        return;
+      }
       headDepthRecentRow = response.imported && response.imported.firstRow ? response.imported.firstRow : null;
       rawModuleResponse = response.data;
       saveTabCache('headdepth', { type:'module', data:response.data });
       closeHeadDepthRecordModal();
       renderSmartModule(response.data);
-      setTimeout(function() { var row = document.querySelector('tr[data-head-depth-row="' + headDepthRecentRow + '"]'); if (row) { row.classList.add('head-depth-row-imported'); setTimeout(function() { row.classList.remove('head-depth-row-imported'); }, 2200); } }, 30);
-    }).withFailureHandler(function(error) { button.disabled = false; button.innerText = 'Save Record'; handleFail(error); }).appendHeadDepthRecord({ sheetName:rawModuleResponse.sheetName, values:values });
+      setTimeout(function() {
+        var row = document.querySelector('tr[data-head-depth-row="' + headDepthRecentRow + '"]');
+        if (row) {
+          row.classList.add('head-depth-row-imported');
+          setTimeout(function() { row.classList.remove('head-depth-row-imported'); }, 2200);
+        }
+      }, 30);
+    }).withFailureHandler(function(error) {
+      button.disabled = false;
+      button.innerText = 'Save Record';
+      handleFail(error);
+    }).appendHeadDepthRecord({ sheetName:rawModuleResponse.sheetName, values:values });
   }
 </script>

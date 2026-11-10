@@ -1,5 +1,46 @@
 /** Base Depth Camera module entry point. Shared parsing remains in Modules.js. */
-function getBaseDepthData() { return getModuleData('basedepth'); }
+function normalizeBaseDepthObstacle_(value) {
+  var text = String(value || '').trim().toLowerCase();
+  if (text.indexOf('2.5') !== -1) return '2.5cm';
+  if (text.indexOf('3') !== -1) return '3cm';
+  if (text.indexOf('2') !== -1) return '2cm';
+  return text ? text + 'cm' : 'Unknown';
+}
+
+function getBaseDepthData() {
+  var result = getModuleData('basedepth');
+  if (!result || !Array.isArray(result.rows)) return result;
+  var headers = result.headers || [];
+  var find = function(patterns, fallback) {
+    for (var i = 0; i < headers.length; i++) {
+      var label = String(headers[i] || '').toLowerCase();
+      if (patterns.some(function(pattern) { return pattern.test(label); })) return i;
+    }
+    return fallback < headers.length ? fallback : -1;
+  };
+  var forwardFillColumns = [
+    find([/robot/, /unit/, /serial/], 0),
+    find([/^sw\b/, /software.*version/, /firmware/], 1),
+    find([/^date/, /test date/], 2),
+    find([/tester/, /operator/, /engineer/], 3),
+    find([/obstacle.*size/, /object.*size/, /brick.*size/, /obstacle/, /setup/], 5),
+    find([/overall.*result/, /^result/, /status/], 13)
+  ];
+  forwardFillColumns.forEach(function(column) {
+    if (column < 0) return;
+    var previous = '';
+    result.rows.forEach(function(row) {
+      var value = String(row[column] || '').trim();
+      if (value) previous = value;
+      else if (previous) row[column] = previous;
+    });
+  });
+  var obstacleColumn = forwardFillColumns[4];
+  if (obstacleColumn >= 0) result.rows.forEach(function(row) {
+    if (row[obstacleColumn]) row[obstacleColumn] = normalizeBaseDepthObstacle_(row[obstacleColumn]);
+  });
+  return result;
+}
 
 var BASE_DEPTH_TOLERANCE_M_ = 0.05;
 
@@ -16,19 +57,19 @@ function findBaseDepthColumn_(headers, patterns, fallback) {
 function getBaseDepthColumnMap_(headers) {
   return {
     robot: findBaseDepthColumn_(headers, [/robot/, /unit/, /serial/], 0),
-    date: findBaseDepthColumn_(headers, [/^date/, /test date/], 1),
-    sw: findBaseDepthColumn_(headers, [/^sw\b/, /software.*version/, /firmware/], 2),
+    date: findBaseDepthColumn_(headers, [/^date/, /test date/], 2),
+    sw: findBaseDepthColumn_(headers, [/^sw\b/, /software.*version/, /firmware/], 1),
     tester: findBaseDepthColumn_(headers, [/tester/, /operator/, /engineer/], 3),
-    obstacle: findBaseDepthColumn_(headers, [/obstacle.*size/, /object.*size/, /brick.*size/, /obstacle/, /setup/], 4),
-    point: findBaseDepthColumn_(headers, [/test.*point/, /^point/, /^run\b/, /^trial\b/, /sequence/, /^#$/], 5),
-    scriptDist: findBaseDepthColumn_(headers, [/script.*dist/, /command.*dist/, /program.*dist/, /set.*dist/], 6),
-    realDist: findBaseDepthColumn_(headers, [/real.*dist/, /actual.*dist/, /measured.*dist/], 7),
-    coordX: findBaseDepthColumn_(headers, [/coord.*\bx\b/, /\bx\b.*coord/, /position.*\bx\b/], 8),
-    coordY: findBaseDepthColumn_(headers, [/coord.*\by\b/, /\by\b.*coord/, /position.*\by\b/], 9),
+    obstacle: findBaseDepthColumn_(headers, [/obstacle.*size/, /object.*size/, /brick.*size/, /obstacle/, /setup/], 5),
+    point: findBaseDepthColumn_(headers, [/test.*point/, /^point/, /^run\b/, /^trial\b/, /sequence/, /^#$/], 6),
+    scriptDist: findBaseDepthColumn_(headers, [/script.*dist/, /command.*dist/, /program.*dist/, /set.*dist/, /detect.*distance.*script/], 6),
+    realDist: findBaseDepthColumn_(headers, [/real.*dist.*sensor/, /real.*dist/, /actual.*dist/, /measured.*dist/], 9),
+    coordX: findBaseDepthColumn_(headers, [/coord.*\bx\b/, /\bx\b.*coord/, /position.*\bx\b/], 15),
+    coordY: findBaseDepthColumn_(headers, [/coord.*\by\b/, /\by\b.*coord/, /position.*\by\b/], 16),
     coord: findBaseDepthColumn_(headers, [/coordinate/, /^coord$/], -1),
     accuracy: findBaseDepthColumn_(headers, [/accuracy/, /percent/, /rate/], 10),
     delta: findBaseDepthColumn_(headers, [/delta/, /difference/, /\bdiff\b/, /error/], 11),
-    status: findBaseDepthColumn_(headers, [/status/, /result/, /pass.*fail/], 12)
+    status: findBaseDepthColumn_(headers, [/overall.*result/, /status/, /result/, /pass.*fail/], 13)
   };
 }
 
@@ -52,7 +93,7 @@ function appendBaseDepthRecord(payload) {
     if (!sheetName || !robotId || !tester || !swVersion) return { success:false, error:'Robot ID, Tester, SW Version and sheet are required.' };
 
     var sections = payload.obstacles || {};
-    var sizes = ['3cm', '2cm'];
+    var sizes = ['3cm', '2.5cm', '2cm'];
     var normalizedRows = [];
     sizes.forEach(function(size) {
       var rows = Array.isArray(sections[size]) ? sections[size] : [];
