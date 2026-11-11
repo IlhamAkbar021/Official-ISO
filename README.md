@@ -16,8 +16,9 @@
 
 ## 🗺️ Architecture & File Map
 
+
 <div align="center">
-  <img width="100%" alt="Architecture Overview" src="https://github.com/user-attachments/assets/da0949cd-e80c-4765-b468-a1c6629fb6d4" />
+  <img width="1851" height="921" alt="image" src="https://github.com/user-attachments/assets/21ad570b-8b20-45ff-9881-e5cbe99402f9" />
 </div>
 
 <br>
