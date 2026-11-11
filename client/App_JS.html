@@ -1572,23 +1572,31 @@
     }
     var tiltRows = filterRows((response.tilt && response.tilt.rows) || []);
     var summary = getLidarInspectionSummary(groupedAccuracy, (response.tilt && response.tilt.rows) || []);
+    var tiltByKey = {};
+    ((response.tilt && response.tilt.rows) || []).forEach(function(item) {
+      var tiltRow = item.row || [];
+      tiltByKey[String(tiltRow[0] || '').trim().toUpperCase() + '|' + String(tiltRow[1] || '').trim().replace(/\//g, '-')] = tiltRow;
+    });
     var isAccuracy = activeLidarSubTab === 'accuracy';
     var visibleAccuracy = groupedAccuracy.filter(function(item) {
       return !searchQuery || item.robotId.toLowerCase().indexOf(searchQuery) !== -1 || item.tester.toLowerCase().indexOf(searchQuery) !== -1;
     });
-    var recordCount = isAccuracy ? visibleAccuracy.length : tiltRows.length;
+    // Both tabs represent the same LiDAR record block. The tilt tab only
+    // expands the accuracy rows with the related tilt fields.
+    var recordCount = visibleAccuracy.length;
     var html = '<div class="lidar-inspection-page"><div class="panel-card smart-table-card lidar-card lidar-panel lidar-inspection-card ' + (isAccuracy ? 'lidar-accuracy-view' : 'lidar-tilt-expanded') + '">' +
-      '<div class="module-unified-hero"><div class="hero-left"><span class="eyebrow">DATA EXPLORER</span><h1 class="hero-title">' + (isAccuracy ? 'LiDAR Accuracy Inspection' : 'LiDAR Tilt &amp; Angle Inspection') + '</h1><p class="hero-purpose"><strong>PURPOSE</strong><span>' + escapeHtml(getModulePurpose('lidar')) + '</span></p></div><div class="hero-actions"><span class="hero-badge-count">' + recordCount + ' units</span></div></div>' + renderLidarKpiStrip(summary) + '<div class="table-scroller lidar-table-scroll">';
+      '<div class="module-unified-hero"><div class="hero-left"><span class="eyebrow">DATA EXPLORER</span><h1 class="hero-title">LiDAR Accuracy Inspection</h1><p class="hero-purpose"><strong>PURPOSE</strong><span>' + escapeHtml(getModulePurpose('lidar')) + '</span></p></div><div class="hero-actions"><span class="hero-badge-count">' + recordCount + ' units</span></div></div>' + renderLidarKpiStrip(summary) + '<div class="table-scroller lidar-table-scroll">';
 
-    if (isAccuracy) {
-      html += '<table class="lidar-table lidar-accuracy-table lidar-inspection-table"><colgroup><col class="lidar-id-col"><col class="lidar-release-col"><col class="lidar-tester-col"><col class="lidar-measure-col"><col class="lidar-measure-col"><col class="lidar-measure-col"><col class="lidar-action-col"></colgroup><thead><tr><th>Robot ID</th><th>Software / Date</th><th>Tester</th><th>Target 5 m</th><th>Target 10 m</th><th>Target 15 m</th><th>' + t('actions') + '</th></tr></thead><tbody>';
+    if (true) {
+      html += '<table class="lidar-table lidar-accuracy-table lidar-inspection-table"><colgroup><col class="lidar-id-col"><col class="lidar-release-col"><col class="lidar-tester-col"><col class="lidar-measure-col"><col class="lidar-measure-col"><col class="lidar-measure-col">' + (!isAccuracy ? '<col span="7">' : '') + '<col class="lidar-action-col"></colgroup><thead><tr><th>Robot ID</th><th>Software / Date</th><th>Tester</th><th>Target 5 m</th><th>Target 10 m</th><th>Target 15 m</th>' + (!isAccuracy ? '<th>Bricks</th><th>Detected Distance</th><th>Height From</th><th>Height To</th><th>Tilt Status</th><th>Angle Range</th><th>Note / Link</th>' : '') + '<th>' + t('actions') + '</th></tr></thead><tbody>';
       if (!visibleAccuracy.length) {
-        html += '<tr><td colspan="7" class="lidar-empty-row">No accuracy records found.</td></tr>';
+        html += '<tr><td colspan="' + (!isAccuracy ? '14' : '7') + '" class="lidar-empty-row">No accuracy records found.</td></tr>';
       } else {
         visibleAccuracy.forEach(function(item) {
           html += '<tr data-robot-id="' + escapeHtml(item.robotId) + '" data-record-date="' + escapeHtml(item.date) + '" data-source-index="' + item.startRowIndex + '"><td class="lidar-robot-id" title="' + escapeHtml(item.robotId) + '">' + escapeHtml(item.robotId) + '</td>' +
             '<td>' + renderLidarReleaseCell(item.swVer, item.date) + '</td><td>' + escapeHtml(item.tester) + '</td>' +
             '<td>' + renderLidarAccuracyMeasurement(item.runA, 5) + '</td><td>' + renderLidarAccuracyMeasurement(item.runB, 10) + '</td><td>' + renderLidarAccuracyMeasurement(item.runC, 15) + '</td>' +
+            (!isAccuracy ? renderLidarTiltExtension(tiltByKey[String(item.robotId || '').trim().toUpperCase() + '|' + String(item.date || '').trim().replace(/\//g, '-')]) : '') +
             '<td>' + renderActionDropdown('lidar_acc', item.startRowIndex, item.robotId, item.date) + '</td></tr>';
         });
       }
@@ -1674,6 +1682,27 @@
     if (!text || text === '-') return '<span class="lidar-empty">—</span>';
     if (/^https?:\/\//i.test(text)) return '<a class="data-link" href="' + escapeHtml(text) + '" target="_blank" rel="noopener noreferrer">Open ↗</a>';
     return '<span title="' + escapeHtml(text) + '">' + escapeHtml(text) + '</span>';
+  }
+
+  // Tilt data is stored in the same LiDAR record block as the three accuracy
+  // runs. Render it as an extension of the matching accuracy row.
+  function renderLidarTiltExtension(row) {
+    if (!row) {
+      return '<td><span class="lidar-empty">—</span></td>' +
+        '<td><span class="lidar-empty">—</span></td>' +
+        '<td><span class="lidar-empty">—</span></td>' +
+        '<td><span class="lidar-empty">—</span></td>' +
+        '<td><span class="lidar-empty">—</span></td>' +
+        '<td><span class="lidar-empty">—</span></td>' +
+        '<td><span class="lidar-empty">—</span></td>';
+    }
+    return '<td>' + escapeHtml(row[4] || '—') + '</td>' +
+      '<td class="lidar-mono">' + renderLidarUnitValue(row[5], 'm') + '</td>' +
+      '<td>' + renderLidarUnitValue(row[6], 'cm') + '</td>' +
+      '<td>' + renderLidarUnitValue(row[7], 'cm') + '</td>' +
+      '<td>' + renderLidarTiltStatus(row[8]) + '</td>' +
+      '<td>' + renderLidarAngleRange(row[9], row[10]) + '</td>' +
+      '<td>' + renderLidarEvidenceCell(row[11]) + '</td>';
   }
 
   function getLidarInspectionSummary(accuracyGroups, rawTiltRows) {
