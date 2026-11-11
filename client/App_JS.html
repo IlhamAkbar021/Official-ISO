@@ -1563,17 +1563,10 @@
 
     if (activeLidarSubTab !== 'accuracy' && activeLidarSubTab !== 'tilt') activeLidarSubTab = 'accuracy';
     var groupedAccuracy = groupLidarAccuracyPivoted((response.accuracy && response.accuracy.rows) || []);
-    if (recentLidarImportRobotId) {
-      groupedAccuracy.sort(function(a, b) {
-        var aRecent = recentLidarImportStartIndex !== null ? a.startRowIndex === recentLidarImportStartIndex : (a.robotId === recentLidarImportRobotId && (!recentLidarImportDate || a.date === recentLidarImportDate));
-        var bRecent = recentLidarImportStartIndex !== null ? b.startRowIndex === recentLidarImportStartIndex : (b.robotId === recentLidarImportRobotId && (!recentLidarImportDate || b.date === recentLidarImportDate));
-        return aRecent === bRecent ? 0 : (aRecent ? -1 : 1);
-      });
-    }
     var tiltRows = filterRows((response.tilt && response.tilt.rows) || []);
     var summary = getLidarInspectionSummary(groupedAccuracy, (response.tilt && response.tilt.rows) || []);
     var tiltByKey = {};
-    ((response.tilt && response.tilt.rows) || []).forEach(function(item) {
+    tiltRows.forEach(function(item) {
       var tiltRow = item.row || [];
       tiltByKey[String(tiltRow[0] || '').trim().toUpperCase() + '|' + String(tiltRow[1] || '').trim().replace(/\//g, '-')] = tiltRow;
     });
@@ -1588,7 +1581,7 @@
       '<div class="module-unified-hero"><div class="hero-left"><span class="eyebrow">DATA EXPLORER</span><h1 class="hero-title">LiDAR Accuracy Inspection</h1><p class="hero-purpose"><strong>PURPOSE</strong><span>' + escapeHtml(getModulePurpose('lidar')) + '</span></p></div><div class="hero-actions"><span class="hero-badge-count">' + recordCount + ' units</span></div></div>' + renderLidarKpiStrip(summary) + '<div class="table-scroller lidar-table-scroll">';
 
     if (true) {
-      html += '<table class="lidar-table lidar-accuracy-table lidar-inspection-table"><colgroup><col class="lidar-id-col"><col class="lidar-release-col"><col class="lidar-tester-col"><col class="lidar-measure-col"><col class="lidar-measure-col"><col class="lidar-measure-col">' + (!isAccuracy ? '<col span="7">' : '') + '<col class="lidar-action-col"></colgroup><thead><tr><th>Robot ID</th><th>Software / Date</th><th>Tester</th><th>Target 5 m</th><th>Target 10 m</th><th>Target 15 m</th>' + (!isAccuracy ? '<th>Bricks</th><th>Detected Distance</th><th>Height From</th><th>Height To</th><th>Tilt Status</th><th>Angle Range</th><th>Note / Link</th>' : '') + '<th>' + t('actions') + '</th></tr></thead><tbody>';
+      html += '<table class="lidar-table lidar-accuracy-table lidar-inspection-table"><colgroup><col class="lidar-id-col"><col class="lidar-release-col"><col class="lidar-tester-col"><col class="lidar-measure-col"><col class="lidar-measure-col"><col class="lidar-measure-col">' + (!isAccuracy ? '<col class="lidar-small-col"><col class="lidar-distance-col"><col class="lidar-small-col"><col class="lidar-small-col"><col class="lidar-status-col"><col class="lidar-angle-col"><col class="lidar-note-col">' : '') + '<col class="lidar-action-col"></colgroup><thead><tr><th>Robot ID</th><th>Software / Date</th><th>Tester</th><th>Target 5 m</th><th>Target 10 m</th><th>Target 15 m</th>' + (!isAccuracy ? '<th>Bricks</th><th>Detected Distance</th><th>Height From</th><th>Height To</th><th>Tilt Status</th><th>Angle Range</th><th>Note / Link</th>' : '') + '<th>' + t('actions') + '</th></tr></thead><tbody>';
       if (!visibleAccuracy.length) {
         html += '<tr><td colspan="' + (!isAccuracy ? '14' : '7') + '" class="lidar-empty-row">No accuracy records found.</td></tr>';
       } else {
@@ -1643,7 +1636,7 @@
     var delta = measured - target;
     var state = getLidarRunState(run, target);
     var deltaText = (delta >= 0 ? '+' : '') + delta.toFixed(2) + 'm';
-    return '<div class="lidar-measurement state-' + state + '" title="Target ' + target.toFixed(2) + 'm · ' + escapeHtml(run.passFail || state) + '"><strong>' + measured.toFixed(2) + 'm</strong><span>' + deltaText + '</span></div>';
+    return '<div class="lidar-measurement state-' + state + '" title="Target ' + target.toFixed(2) + 'm · Delta ' + escapeHtml(deltaText) + ' · ' + escapeHtml(run.passFail || state) + '"><strong>' + measured.toFixed(2) + 'm</strong></div>';
   }
 
   function renderLidarReleaseCell(swVersion, date) {
@@ -1813,13 +1806,44 @@
     };
     if (type === 'lidar_acc') {
       var r2 = rawLidarResponse.accuracy.rows[index + 1] || [], r3 = rawLidarResponse.accuracy.rows[index + 2] || [];
-      tableRow.innerHTML = '<td>' + input('li_robot', data[0]) + '</td><td>' + input('li_date', data[1], 'date') + '<br>' + input('li_sw', data[2]) + '</td><td>' + input('li_tester', data[3]) + '</td><td>' + input('li_d5', data[5], 'number') + '</td><td>' + input('li_d10', r2[5], 'number') + '</td><td>' + input('li_d15', r3[5], 'number') + '</td><td><button class="btn-action" onclick="saveLidarInlineEdit(\'lidar_acc\',' + index + ')">Save</button><button class="btn-ctrl" onclick="loadCurrentTab()">Cancel</button></td>';
+      var tilt = null;
+      if (activeLidarSubTab === 'tilt' && rawLidarResponse.tilt && rawLidarResponse.tilt.rows) {
+        for (var ti = 0; ti < rawLidarResponse.tilt.rows.length; ti++) {
+          var tr = rawLidarResponse.tilt.rows[ti] || [];
+          if (String(tr[0] || '').trim().toUpperCase() === String(data[0] || '').trim().toUpperCase() && String(tr[1] || '').trim().replace(/\//g, '-') === String(data[1] || '').trim().replace(/\//g, '-')) { tilt = { row: tr, index: ti }; break; }
+        }
+      }
+      var tv = tilt ? tilt.row : [];
+      var tiltCells = activeLidarSubTab === 'tilt' ?
+        '<td>' + input('li_bricks', tv[4], 'number') + '</td><td>' + input('li_detected', tv[5], 'number') + '</td><td>' + input('li_height_from', tv[6], 'number') + '</td><td>' + input('li_height_to', tv[7], 'number') + '</td><td>' + input('li_tilt_status', tv[8]) + '</td><td>' + input('li_angle_from', tv[9], 'number') + input('li_angle_to', tv[10], 'number') + '</td><td>' + input('li_note', tv[11]) + '</td>' : '';
+      tableRow.innerHTML = '<td>' + input('li_robot', data[0]) + '</td><td>' + input('li_date', data[1], 'date') + '<br>' + input('li_sw', data[2]) + '</td><td>' + input('li_tester', data[3]) + '</td><td>' + input('li_d5', data[5], 'number') + '</td><td>' + input('li_d10', r2[5], 'number') + '</td><td>' + input('li_d15', r3[5], 'number') + '</td>' + tiltCells + '<td><button class="btn-action" onclick="saveLidarInlineEdit(\'lidar_acc\',' + index + ',' + (tilt ? tilt.index : -1) + ')">Save</button><button class="btn-ctrl" onclick="loadCurrentTab()">Cancel</button></td>';
+      if (activeLidarSubTab === 'tilt') {
+        var brickInput = document.getElementById('li_bricks');
+        if (brickInput) brickInput.addEventListener('input', updateLidarInlineTiltFields);
+        updateLidarInlineTiltFields();
+      }
     } else {
       tableRow.innerHTML = '<td>' + input('li_robot', data[0]) + '</td><td>' + input('li_date', data[1], 'date') + '<br>' + input('li_sw', data[2]) + '</td><td>' + input('li_tester', data[3]) + '</td><td>' + input('li_bricks', data[4], 'number') + '</td><td>' + input('li_detected', data[5], 'number') + '</td><td colspan="5">' + input('li_note', data[11]) + ' <button class="btn-action" onclick="saveLidarInlineEdit(\'lidar_tilt\',' + index + ')">Save</button><button class="btn-ctrl" onclick="loadCurrentTab()">Cancel</button></td>';
     }
   }
 
-  function saveLidarInlineEdit(type, index) {
+  function updateLidarInlineTiltFields() {
+    var bricks = Number((document.getElementById('li_bricks') || {}).value);
+    if (!isFinite(bricks) || bricks < 0 || bricks > 8 || Math.floor(bricks) !== bricks) return;
+    var set = function(id, value) { var el = document.getElementById(id); if (el) el.value = value; };
+    var heightFrom = (bricks - 1) * 10;
+    var heightTo = bricks * 10;
+    var angleFrom = ((bricks - 4) * 0.38).toFixed(2);
+    var angleTo = ((bricks - 3) * 0.38).toFixed(2);
+    var status = bricks < 4 ? 'Tilt Down, Acceptable' : (bricks === 4 ? 'Normal' : (bricks === 5 ? 'Tilt Up, but Acceptable' : 'Tilt Up, Not Acceptable'));
+    set('li_height_from', heightFrom);
+    set('li_height_to', heightTo);
+    set('li_tilt_status', status);
+    set('li_angle_from', angleFrom);
+    set('li_angle_to', angleTo);
+  }
+
+  function saveLidarInlineEdit(type, index, tiltIndex) {
     var value = function(id) { var el = document.getElementById(id); return el ? el.value : ''; };
     var payload = { rowIndex:index, lidarType:type === 'lidar_tilt' ? 'tilt' : 'accuracy', robotId:value('li_robot'), date:value('li_date'), swVer:value('li_sw'), tester:value('li_tester') };
     if (payload.lidarType === 'accuracy') {
@@ -1829,7 +1853,13 @@
     } else {
       payload.bricks=value('li_bricks'); payload.detectedDist=value('li_detected'); payload.note=value('li_note');
     }
-    google.script.run.withSuccessHandler(function(){ loadCurrentTab(true); }).withFailureHandler(function(error){ alert('Update failed: ' + (error && error.message ? error.message : error)); }).updateLidarRecord(payload);
+    var saveTilt = function() {
+      if (payload.lidarType !== 'accuracy') return loadCurrentTab(true);
+      var tiltPayload = { rowIndex:(tiltIndex !== undefined && tiltIndex >= 0 ? tiltIndex : index), lidarType:'tilt', robotId:payload.robotId, date:payload.date, swVer:payload.swVer, tester:payload.tester,
+        bricks:value('li_bricks'), detectedDist:value('li_detected'), heightFrom:value('li_height_from'), heightTo:value('li_height_to'), tiltStatus:value('li_tilt_status'), angleFrom:value('li_angle_from'), angleTo:value('li_angle_to'), note:value('li_note') };
+      google.script.run.withSuccessHandler(function(){ loadCurrentTab(true); }).withFailureHandler(function(error){ alert('Tilt update failed: ' + (error && error.message ? error.message : error)); }).updateLidarRecord(tiltPayload);
+    };
+    google.script.run.withSuccessHandler(saveTilt).withFailureHandler(function(error){ alert('Update failed: ' + (error && error.message ? error.message : error)); }).updateLidarRecord(payload);
   }
 
   function renderActionDropdown(type, index, robotId, recordDate) {

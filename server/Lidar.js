@@ -269,9 +269,20 @@ function updateLidarRecord(payload) {
     var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
     var sheet = getSheetFlexible(ss, ['lidar', 'LiDAR']);
     if (!sheet) return { success:false, error:'LiDAR sheet not found.' };
-    var row = Number(payload.rowIndex) + 3;
-    if (!isFinite(row) || row < 3) return { success:false, error:'Invalid LiDAR row.' };
     var type = payload.lidarType === 'tilt' ? 'tilt' : 'accuracy';
+    var row = Number(payload.rowIndex) + 3;
+    if (type === 'tilt') {
+      var allValues = sheet.getDataRange().getDisplayValues();
+      var wantedRobot = String(payload.robotId || '').trim().toUpperCase();
+      var wantedDate = String(payload.date || '').trim().replace(/\//g, '-');
+      row = -1;
+      for (var locateIndex = 2; locateIndex < allValues.length; locateIndex++) {
+        var sheetRobot = String(allValues[locateIndex][0] || '').trim().toUpperCase();
+        var sheetDate = String(allValues[locateIndex][1] || '').trim().replace(/\//g, '-');
+        if (sheetRobot === wantedRobot && sheetDate === wantedDate) { row = locateIndex + 1; break; }
+      }
+    }
+    if (!isFinite(row) || row < 3) return { success:false, error:'The selected LiDAR record could not be located.' };
     if (type === 'accuracy') {
       var shared = [[payload.date || '', payload.swVer || '', payload.tester || '']];
       sheet.getRange(row, 2, 1, 3).setValues(shared);

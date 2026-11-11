@@ -2529,10 +2529,19 @@
   .lidar-panel .lidar-inspection-table th,
   .lidar-panel .lidar-inspection-table td { min-width:0 !important; height:42px; padding:6px 10px; overflow:hidden; color:#334155; background:#fff; border-right:1px solid #f1f5f9; border-bottom:1px solid #e2e8f0; font-size:11px; line-height:1.25; text-align:center; text-overflow:ellipsis; vertical-align:middle; white-space:nowrap; }
   .lidar-panel .lidar-inspection-table thead th { position:sticky !important; top:0 !important; z-index:30 !important; height:40px; color:#475569; background:#f8fafc !important; font-size:10px; font-weight:750; letter-spacing:.045em; text-transform:uppercase; }
-  .lidar-panel.lidar-tilt-expanded .lidar-table { min-width:1280px; }
+  .lidar-panel.lidar-tilt-expanded .lidar-table { min-width:0; }
   .lidar-panel.lidar-tilt-expanded .lidar-table th,
   .lidar-panel.lidar-tilt-expanded .lidar-table td { white-space:nowrap; }
-  .lidar-panel.lidar-tilt-expanded .lidar-table .lidar-id-col { width:170px; }
+  .lidar-panel.lidar-tilt-expanded .lidar-table .lidar-id-col { width:145px !important; }
+  .lidar-panel.lidar-tilt-expanded .lidar-table .lidar-release-col { width:125px !important; }
+  .lidar-panel.lidar-tilt-expanded .lidar-table .lidar-tester-col { width:75px !important; }
+  .lidar-panel.lidar-tilt-expanded .lidar-table .lidar-measure-col { width:120px !important; }
+  .lidar-panel.lidar-tilt-expanded .lidar-table col.lidar-small-col { width:68px !important; }
+  .lidar-panel.lidar-tilt-expanded .lidar-table col.lidar-distance-col { width:105px !important; }
+  .lidar-panel.lidar-tilt-expanded .lidar-table col.lidar-status-col { width:115px !important; }
+  .lidar-panel.lidar-tilt-expanded .lidar-table col.lidar-angle-col { width:105px !important; }
+  .lidar-panel.lidar-tilt-expanded .lidar-table col.lidar-note-col { width:85px !important; }
+  .lidar-panel.lidar-tilt-expanded .lidar-table col.lidar-action-col { width:52px !important; }
   .lidar-inline-edit-row td { padding:6px 5px !important; vertical-align:middle; background:#eef4ff !important; }
   .lidar-inline-input { box-sizing:border-box; display:block; width:100%; min-width:0; height:32px; padding:5px 7px; border:1px solid #b8c7dd; border-radius:5px; background:#fff; color:#172033; font:600 12px/1.2 Inter,Arial,sans-serif; }
   .lidar-inline-input:focus { outline:2px solid rgba(37,99,235,.2); border-color:#2563eb; }
@@ -2550,7 +2559,7 @@
   .lidar-release-cell strong { color:#1e293b; font-size:10.5px; font-weight:700; }
   .lidar-release-cell small { margin-top:.12rem; color:#94a3b8; font-size:9.5px; }
 
-  .lidar-measurement { width:132px; min-height:28px; margin:0 auto; display:flex; align-items:center; justify-content:space-between; gap:.4rem; padding:3px 5px 3px 8px; border:1px solid #e2e8f0; border-radius:7px; background:#f8fafc; }
+  .lidar-measurement { width:92px; min-height:28px; margin:0 auto; display:flex; align-items:center; justify-content:center; gap:.4rem; padding:3px 5px; border:1px solid #e2e8f0; border-radius:7px; background:#f8fafc; }
   .lidar-measurement strong { color:#1e293b; font-size:11px; font-weight:750; font-variant-numeric:tabular-nums; }
   .lidar-measurement span { min-width:52px; padding:2px 5px; border-radius:5px; font-size:9.5px; font-weight:750; font-variant-numeric:tabular-nums; }
   .lidar-measurement.state-pass { background:#ecfdf5; border-color:#a7f3d0; }
