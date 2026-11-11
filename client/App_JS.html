@@ -1778,7 +1778,10 @@
     document.querySelectorAll('.lidar-inline-edit-row').forEach(function(row) { row.classList.remove('lidar-inline-edit-row'); });
     tableRow.classList.add('lidar-inline-edit-row');
     var data = type === 'lidar_acc' ? (rawLidarResponse.accuracy.rows[index] || []) : (rawLidarResponse.tilt.rows[index] || []);
-    var input = function(id, value, kind) { return '<input class="lidar-inline-input" id="' + id + '" type="' + (kind || 'text') + '" value="' + escapeHtml(value || '') + '">'; };
+    var input = function(id, value, kind) {
+      var inputValue = kind === 'date' ? String(value || '').replace(/\//g, '-') : String(value || '');
+      return '<input class="lidar-inline-input" id="' + id + '" type="' + (kind || 'text') + '" value="' + escapeHtml(inputValue) + '">';
+    };
     if (type === 'lidar_acc') {
       var r2 = rawLidarResponse.accuracy.rows[index + 1] || [], r3 = rawLidarResponse.accuracy.rows[index + 2] || [];
       tableRow.innerHTML = '<td>' + input('li_robot', data[0]) + '</td><td>' + input('li_date', data[1], 'date') + '<br>' + input('li_sw', data[2]) + '</td><td>' + input('li_tester', data[3]) + '</td><td>' + input('li_d5', data[5], 'number') + '</td><td>' + input('li_d10', r2[5], 'number') + '</td><td>' + input('li_d15', r3[5], 'number') + '</td><td><button class="btn-action" onclick="saveLidarInlineEdit(\'lidar_acc\',' + index + ')">Save</button><button class="btn-ctrl" onclick="loadCurrentTab()">Cancel</button></td>';

@@ -32,10 +32,13 @@
       robot:0, sw:1, date:2, tester:3, obstacle:5, point:6, scriptDist:7,
       realDist:9, distanceStd:10, coordX:15, coordY:16, coord:-1, accuracy:10, delta:11, projector:12, status:12
     };
-    var excluded = {};
-    Object.keys(columns).forEach(function(key) { if (typeof columns[key] === 'number' && columns[key] >= 0) excluded[columns[key]] = true; });
+    // Reference mode is an extension of the main table. Keep only the
+    // measurement fields needed to compare the selected point; do not append
+    // every unrelated sheet column.
     columns.reference = [];
-    headers.forEach(function(_, index) { if (!excluded[index]) columns.reference.push(index); });
+    [columns.accuracy, columns.delta, columns.projector].forEach(function(index) {
+      if (index >= 0 && index < headers.length && columns.reference.indexOf(index) === -1) columns.reference.push(index);
+    });
     return columns;
   }
 
