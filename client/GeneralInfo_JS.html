@@ -1,85 +1,422 @@
 <script>
+  var GENERAL_INFO_CACHE_KEY = 'cache_general_info_cdn_v3';
+  var generalInfoRenderedItems = [];
+  var generalInfoRenderedSignature = '';
+  var generalInfoImageObserver = null;
+  var generalInfoImageQueue = [];
+  var generalInfoActiveLoads = 0;
+  var generalInfoLoadGeneration = 0;
+  var GENERAL_INFO_MAX_IMAGE_LOADS = 2;
+  var GENERAL_INFO_CACHE_NAME = 'iso-general-info-images-v1';
+  var GENERAL_INFO_FETCH_TIMEOUT = 8000;
+  var generalInfoObjectUrls = [];
+  var generalInfoMemoryObjectUrls = Object.create(null);
+  var generalInfoWorker = null;
+  var generalInfoWorkerSourceUrl = '';
+  var generalInfoWorkerRequests = {};
+  var generalInfoWorkerSequence = 0;
+
   function giEscape(value) {
     return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
+
+  function giDefaultItems() {
+    return [
+      { id:'mindmap', title:'Mind Map of ISO Test', note:'Test dependencies and structure' },
+      { id:'process', title:'EVT2 Testing Process / Structure', note:'Workflow and factory validation' },
+      { id:'station', title:'Test Station Layout', note:'Physical room arrangement' },
+      { id:'robot', title:'Robot LU Definition & Pose', note:'LU = ⌈w/500⌉ × 500 mm | 1.17 m x 0.56 m x 0.56 m' }
+    ];
+  }
+
+  function giDriveFileId(value) {
+    var url = String(value || '').trim();
+    var patterns = [/\/d\/([a-zA-Z0-9_-]{20,})/, /[?&]id=([a-zA-Z0-9_-]{20,})/, /\/thumbnail\?id=([a-zA-Z0-9_-]{20,})/, /^([a-zA-Z0-9_-]{20,})$/];
+    for (var i = 0; i < patterns.length; i++) { var match = url.match(patterns[i]); if (match) return match[1]; }
+    return '';
+  }
+
+  function giOptimizedImageUrl(value, width) {
+    var url = String(value || '').trim();
+    if (!url || /^data:image\//i.test(url)) return '';
+    var fileId = giDriveFileId(url);
+    return fileId ? 'https://drive.google.com/thumbnail?id=' + encodeURIComponent(fileId) + '&sz=w' + (width || 1200) : (/^https?:\/\//i.test(url) ? url : '');
+  }
+
+  function revokeGeneralInfoObjectUrls() {
+    generalInfoObjectUrls.forEach(function(url) { try { URL.revokeObjectURL(url); } catch (error) {} });
+    generalInfoObjectUrls = [];
+    generalInfoMemoryObjectUrls = Object.create(null);
+  }
+
+  function generalInfoImageCacheKey(imageRef, url) {
+    return imageRef ? 'cell:' + imageRef.sheetName + ':' + imageRef.row + ':' + imageRef.column : 'url:' + String(url || '');
+  }
+
+  function rememberGeneralInfoObjectUrl(key, objectUrl) {
+    if (!key || !objectUrl) return objectUrl;
+    var previous = generalInfoMemoryObjectUrls[key];
+    if (previous && previous !== objectUrl) {
+      try { URL.revokeObjectURL(previous); } catch (error) {}
+      generalInfoObjectUrls = generalInfoObjectUrls.filter(function(url) { return url !== previous; });
+    }
+    generalInfoMemoryObjectUrls[key] = objectUrl;
+    if (generalInfoObjectUrls.indexOf(objectUrl) === -1) generalInfoObjectUrls.push(objectUrl);
+    return objectUrl;
+  }
+
+  function ensureGeneralInfoWorker() {
+    if (generalInfoWorker || !window.Worker) return generalInfoWorker;
+    var sourceNode = document.getElementById('generalInfoImageWorkerSource');
+    if (!sourceNode || !sourceNode.textContent.trim()) return null;
+    try {
+      var source = new Blob([sourceNode.textContent], { type:'application/javascript' });
+      generalInfoWorkerSourceUrl = URL.createObjectURL(source);
+      generalInfoWorker = new Worker(generalInfoWorkerSourceUrl);
+      URL.revokeObjectURL(generalInfoWorkerSourceUrl);
+      generalInfoWorkerSourceUrl = '';
+      generalInfoWorker.onmessage = function(event) {
+        var message = event.data || {};
+        var request = generalInfoWorkerRequests[message.id];
+        if (!request) return;
+        delete generalInfoWorkerRequests[message.id];
+        if (message.error) request.reject(new Error(message.error));
+        else request.resolve(message);
+      };
+      generalInfoWorker.onerror = function() {
+        Object.keys(generalInfoWorkerRequests).forEach(function(id) { generalInfoWorkerRequests[id].reject(new Error('Image worker failed')); });
+        generalInfoWorkerRequests = {};
+      };
+    } catch (error) { generalInfoWorker = null; }
+    return generalInfoWorker;
+  }
+
+  function requestGeneralInfoWorker(type, url, extra) {
+    var worker = ensureGeneralInfoWorker();
+    if (!worker) return Promise.reject(new Error('Worker unavailable'));
+    return new Promise(function(resolve, reject) {
+      var id = 'gi-' + (++generalInfoWorkerSequence);
+      generalInfoWorkerRequests[id] = { resolve:resolve, reject:reject };
+      var payload = Object.assign({ id:id, type:type || 'image' }, extra || {});
+      if (url) payload.url = url;
+      worker.postMessage(payload);
+    });
+  }
+
+  function fetchGeneralInfoBlobUrl(url) {
+    if (!url) return Promise.reject(new Error('Missing image URL'));
+    var memoryKey = generalInfoImageCacheKey(null, url);
+    if (generalInfoMemoryObjectUrls[memoryKey]) return Promise.resolve(generalInfoMemoryObjectUrls[memoryKey]);
+    return requestGeneralInfoWorker('image', url).then(function(message) {
+      var objectUrl = URL.createObjectURL(message.blob);
+      return rememberGeneralInfoObjectUrl(memoryKey, objectUrl);
+    }).catch(function(workerError) {
+      if (!('caches' in window) || !window.fetch) return Promise.reject(workerError);
+      return caches.open(GENERAL_INFO_CACHE_NAME).then(function(cache) {
+        return cache.match(url).then(function(cached) {
+          var responsePromise = cached ? Promise.resolve(cached) : (function() {
+            var controller = 'AbortController' in window ? new AbortController() : null;
+            var timer = controller ? window.setTimeout(function() { controller.abort(); }, GENERAL_INFO_FETCH_TIMEOUT) : null;
+            return fetch(url, { mode:'cors', credentials:'omit', signal:controller ? controller.signal : undefined }).then(function(response) {
+              if (!response.ok) throw new Error('Image request failed: ' + response.status);
+              return cache.put(url, response.clone()).catch(function() {}).then(function() { return response; });
+            }).finally(function() { if (timer) window.clearTimeout(timer); });
+          })();
+          return responsePromise.then(function(response) { return response.blob(); }).then(function(blob) {
+            var objectUrl = URL.createObjectURL(blob);
+            return rememberGeneralInfoObjectUrl(memoryKey, objectUrl);
+          });
+        });
+      });
+    });
+  }
+
+  function fetchGeneralInfoProtectedBlobUrl(imageRef) {
+    if (!imageRef || typeof google === 'undefined' || !google.script || !google.script.run) return Promise.reject(new Error('Protected image reference unavailable'));
+    var memoryKey = generalInfoImageCacheKey(imageRef, '');
+    if (generalInfoMemoryObjectUrls[memoryKey]) return Promise.resolve(generalInfoMemoryObjectUrls[memoryKey]);
+    var cacheKey = 'https://general-info.local/' + encodeURIComponent(imageRef.sheetName + ':' + imageRef.row + ':' + imageRef.column);
+    return new Promise(function(resolve, reject) {
+      google.script.run.withSuccessHandler(function(result) {
+        if (!result || !result.success || !result.dataUrl) { reject(new Error(result && result.error || 'Protected image unavailable')); return; }
+        requestGeneralInfoWorker('imageData', result.dataUrl, { dataUrl:result.dataUrl, cacheKey:cacheKey }).then(function(message) {
+          var objectUrl = URL.createObjectURL(message.blob);
+          resolve(rememberGeneralInfoObjectUrl(memoryKey, objectUrl));
+        }).catch(function() {
+          // Worker fallback for browsers that block Blob workers in an iframe.
+          fetch(result.dataUrl).then(function(response) { return response.blob(); }).then(function(blob) {
+            var objectUrl = URL.createObjectURL(blob);
+            resolve(rememberGeneralInfoObjectUrl(memoryKey, objectUrl));
+          }).catch(reject);
+        });
+      }).withFailureHandler(reject).getIsoImageData(imageRef);
+    });
+  }
+
+  function loadGeneralInfoImage(image) {
+    var source = image && (image.dataset.sourceUrl || image.dataset.src);
+    var imageRef = null;
+    try { imageRef = image && image.dataset.imageRef ? JSON.parse(image.dataset.imageRef) : null; } catch (error) {}
+    if (!image || (!source && !imageRef)) return Promise.reject(new Error('Missing image source'));
+    // CellImage URLs from Sheets are authorization-bound. Prefer the same
+    // protected RPC path used by Head Depth even when getContentUrl() exists.
+    if (imageRef) return fetchGeneralInfoProtectedBlobUrl(imageRef).then(function(objectUrl) { image.src = objectUrl; return objectUrl; });
+    return fetchGeneralInfoBlobUrl(source).catch(function() {
+      // Drive may reject CORS for Cache Storage while still allowing an img
+      // element to render. Keep the direct-CDN path as a safe compatibility fallback.
+      return new Promise(function(resolve, reject) {
+        image.dataset.directFallback = 'true';
+        var settled = false;
+        var timer = window.setTimeout(function() { if (!settled) { settled = true; reject(new Error('Direct image timeout')); } }, 2000);
+        image.addEventListener('load', function() { if (!settled) { settled = true; window.clearTimeout(timer); resolve(source); } }, { once:true });
+        image.addEventListener('error', function() { if (!settled) { settled = true; window.clearTimeout(timer); reject(new Error('Image unavailable')); } }, { once:true });
+        image.src = source;
+      });
+    }).then(function(objectUrl) {
+      if (objectUrl && image.dataset.directFallback !== 'true') image.src = objectUrl;
+      return objectUrl;
+    });
+  }
+
   function getOrCreateGeneralInfoContainer() {
     var existing = document.getElementById('generalInfoView');
     if (existing) { existing.id = 'tableContainer'; return existing; }
     var table = document.getElementById('tableContainer');
-    // Keep the shared id intact; all other module renderers depend on it.
     if (table) return table;
     var parent = document.querySelector('.content-scroll-area') || document.querySelector('main') || document.body;
     var view = document.createElement('div');
     view.id = 'generalInfoView';
-    view.style.cssText = 'display:block;visibility:visible;opacity:1;width:100%;box-sizing:border-box;';
     parent.appendChild(view);
     return view;
   }
+
   function renderGeneralInfoShell(container) {
-    container = container || document.getElementById('tableContainer');
+    container = container || getOrCreateGeneralInfoContainer();
     if (!container) return;
-    container.style.display = 'block';
-    container.style.visibility = 'visible';
-    container.style.opacity = '1';
-    renderGeneralInfoPage({ success: true, items: [
-      { title: 'Mind Map of ISO Test', note: 'Test dependencies and structure' },
-      { title: 'EVT2 Testing Process / Structure', note: 'Workflow and factory validation' },
-      { title: 'Test Station Layout', note: 'Physical room arrangement' },
-      { title: 'Robot LU Definition & Pose', note: 'LU = ⌈w/500⌉ × 500 mm | 1.17 m x 0.56 m x 0.56 m' }
-    ] });
+    container.style.cssText = 'display:block;visibility:visible;opacity:1;width:100%;box-sizing:border-box;';
+    if (container.querySelector('.general-info-clean-card')) return;
+    renderGeneralInfoPage({ success:true, pending:true, items:giDefaultItems() });
   }
 
-  function showGeneralInfoSkeleton() {
-    var container = getOrCreateGeneralInfoContainer();
-    if (!container) return;
-    container.innerHTML = '<div class="panel-card smart-table-card general-info-clean-card"><div class="general-info-clean-header"><span class="eyebrow">ISO REFERENCE</span><h1>General Info &amp; Standards</h1></div><div class="gi-grid"><div class="gi-skeleton"></div><div class="gi-skeleton"></div><div class="gi-skeleton"></div><div class="gi-skeleton"></div></div></div>';
-  }
+  function showGeneralInfoSkeleton() { renderGeneralInfoShell(getOrCreateGeneralInfoContainer()); }
 
   function loadGeneralInfoFast(viewRequestId) {
-    var main = document.getElementById('tableContainer') || document.querySelector('main');
-    renderGeneralInfoShell(main && main.id === 'tableContainer' ? main : document.getElementById('tableContainer'));
-    var fallback = { success: true, items: [
-      { id: 'mindmap', title: 'Mind Map of ISO Test', note: 'Test dependencies and structure' },
-      { id: 'process', title: 'EVT2 Testing Process / Structure', note: 'Workflow and factory validation' },
-      { id: 'station', title: 'Test Station Layout', note: 'Physical room arrangement' },
-      { id: 'robot', title: 'Robot LU Definition & Pose', note: 'LU = ⌈w/500⌉ × 500 mm | 1.17 m x 0.56 m x 0.56 m' }
-    ] };
+    var fallback = { success:true, pending:true, items:giDefaultItems() };
     try {
-      var cached = localStorage.getItem('cache_general_info');
-      if (cached) renderGeneralInfoPage(JSON.parse(cached));
-      else renderGeneralInfoPage(fallback);
-    } catch (e) { renderGeneralInfoPage(fallback); }
+      var cached = localStorage.getItem(GENERAL_INFO_CACHE_KEY);
+      renderGeneralInfoPage(cached ? JSON.parse(cached) : fallback);
+    } catch (error) { renderGeneralInfoPage(fallback); }
+
     try {
       google.script.run.withSuccessHandler(function(response) {
         if (typeof currentTab !== 'undefined' && currentTab !== 'general') return;
         if (typeof viewRequestId === 'number' && typeof loadRequestId === 'number' && viewRequestId !== loadRequestId) return;
-        if (response && response.success && response.items) {
-          try { localStorage.setItem('cache_general_info', JSON.stringify(response)); } catch (cacheError) {}
+        if (response && response.success && Array.isArray(response.items)) {
+          try { localStorage.setItem(GENERAL_INFO_CACHE_KEY, JSON.stringify(response)); } catch (cacheError) {}
           renderGeneralInfoPage(response);
+        } else {
+          renderGeneralInfoPage({ success:false, items:giDefaultItems() });
         }
-      }).withFailureHandler(function() {}).getGeneralInfoData();
-    } catch (requestError) {}
+      }).withFailureHandler(function() {
+        if (!localStorage.getItem(GENERAL_INFO_CACHE_KEY)) renderGeneralInfoPage({ success:false, items:giDefaultItems() });
+      }).getGeneralInfoDataV2();
+    } catch (requestError) {
+      if (!localStorage.getItem(GENERAL_INFO_CACHE_KEY)) renderGeneralInfoPage({ success:false, items:giDefaultItems() });
+    }
   }
 
   function renderGeneralInfoPage(response) {
     var data = response && response.data ? response.data : (response || {});
-    var items = data.items || [];
-    var html = '<div class="panel-card smart-table-card general-info-clean-card"><div class="general-info-clean-header"><span class="eyebrow">ISO REFERENCE</span><h1>General Info &amp; Standards</h1></div><div class="gi-grid">';
-    items.forEach(function(item) {
-      var image = item.img ? '<img src="' + giEscape(item.img) + '" alt="' + giEscape(item.title) + '">' : '<span class="gi-unavailable">Image unavailable</span>';
-      var click = item.img ? ' onclick="openSheetImagePreview(\'' + giEscape(item.img).replace(/'/g, '%27') + '\',\'' + giEscape(item.title).replace(/'/g, '%27') + '\')"' : '';
-      var note = giEscape(item.note || '');
-      if (item.link && (item.link.indexOf('http://') === 0 || item.link.indexOf('https://') === 0)) note += ' <a class="gi-link" href="' + giEscape(item.link) + '" target="_blank" rel="noopener">Open link ↗</a>';
-      html += '<article class="gi-card"><div class="gi-img-wrap"' + click + '>' + image + '</div><div class="gi-info"><strong>' + giEscape(item.title) + '</strong><small>' + note + '</small></div></article>';
+    var items = Array.isArray(data.items) && data.items.length ? data.items : giDefaultItems();
+    var pending = !!data.pending;
+    generalInfoRenderedItems = items.map(function(item) {
+      var copy = {};
+      Object.keys(item || {}).forEach(function(key) { copy[key] = item[key]; });
+      copy.img = giOptimizedImageUrl(copy.img, 800);
+      return copy;
     });
-    if (!items.length) html += '<div class="gi-empty">No reference images available.</div>';
+    var signature = JSON.stringify({ pending:pending, items:generalInfoRenderedItems.map(function(item) { return [item.id,item.title,item.note,item.link,item.img,item.imageRef]; }) });
+    var existingContainer = getOrCreateGeneralInfoContainer();
+    if (signature === generalInfoRenderedSignature && existingContainer && existingContainer.querySelector('.general-info-clean-card')) {
+      initGeneralInfoImages(existingContainer);
+      return existingContainer.innerHTML;
+    }
+    generalInfoRenderedSignature = signature;
+    var html = '<div class="panel-card smart-table-card general-info-clean-card"><div class="general-info-clean-header"><div><span class="eyebrow">ISO REFERENCE</span><h1>General Info &amp; Standards</h1></div><span class="gi-header-hint">Select an image for full-resolution inspection</span></div><div class="gi-grid">';
+    generalInfoRenderedItems.forEach(function(item, index) {
+      var hasImage = !!item.img || !!item.imageRef;
+      var image = hasImage ? '<img class="gi-reference-image" data-image-source="true" data-src="' + giEscape(item.img || '') + '" data-source-url="' + giEscape(item.img || '') + '" data-image-ref="' + giEscape(item.imageRef ? JSON.stringify(item.imageRef) : '') + '" data-original-src="' + giEscape(item.img || '') + '" data-retry="0" alt="' + giEscape(item.title) + '" loading="lazy" decoding="async" fetchpriority="low" onload="handleGeneralInfoImageLoad(this)" onerror="handleGeneralInfoImageError(this)">' : '';
+      var fallbackClass = !hasImage && !pending ? ' is-visible' : '';
+      var note = giEscape(item.note || '');
+      if (item.link && /^https?:\/\//i.test(item.link)) note += ' <a class="gi-link" href="' + giEscape(item.link) + '" target="_blank" rel="noopener">Open link ↗</a>';
+      html += '<article class="gi-card"><button type="button" class="gi-img-wrap' + (!hasImage && !pending ? ' has-error' : '') + '" data-item-index="' + index + '" onclick="openGeneralInfoLightbox(this)" aria-label="Inspect ' + giEscape(item.title) + '"' + (hasImage ? '' : ' disabled') + '><span class="gi-image-skeleton" aria-hidden="true"></span>' + image + '<span class="gi-unavailable' + fallbackClass + '">Image unavailable</span><span class="gi-inspect-chip" aria-hidden="true">Inspect</span></button><div class="gi-info"><strong>' + giEscape(item.title) + '</strong><small>' + note + '</small></div></article>';
+    });
     html += '</div></div>';
-    var container = getOrCreateGeneralInfoContainer();
-    if (container) container.innerHTML = html;
+    var container = existingContainer;
+    if (container) {
+      generalInfoLoadGeneration++;
+      generalInfoImageQueue = [];
+      generalInfoActiveLoads = 0;
+      container.innerHTML = html;
+      initGeneralInfoImages(container);
+    }
     return html;
   }
-  function renderGeneralInfoImages(response) {
-    var container = getOrCreateGeneralInfoContainer();
-    if (container) container.innerHTML = renderGeneralInfoPage(response);
+
+  function initGeneralInfoImages(container) {
+    if (!container) return;
+    var images = Array.prototype.slice.call(container.querySelectorAll('.gi-reference-image[data-image-source="true"]:not([data-queued])'));
+    if (!images.length) return;
+    if ('IntersectionObserver' in window) {
+      if (!generalInfoImageObserver) {
+        generalInfoImageObserver = new IntersectionObserver(function(entries) {
+          entries.forEach(function(entry) {
+            if (!entry.isIntersecting) return;
+            generalInfoImageObserver.unobserve(entry.target);
+            entry.target.dataset.imageObserved = 'false';
+            queueGeneralInfoImage(entry.target.querySelector('.gi-reference-image[data-src]'));
+          });
+        }, { rootMargin:'180px 0px', threshold:.01 });
+      }
+      images.forEach(function(image) {
+        var wrapper = image.closest('.gi-img-wrap');
+        if (!wrapper || wrapper.dataset.imageObserved === 'true') return;
+        wrapper.dataset.imageObserved = 'true';
+        generalInfoImageObserver.observe(wrapper);
+      });
+    } else {
+      images.forEach(queueGeneralInfoImage);
+    }
   }
+
+  function queueGeneralInfoImage(image) {
+    if (!image || image.dataset.queued) return;
+    image.dataset.queued = 'true';
+    image.dataset.loadGeneration = String(generalInfoLoadGeneration);
+    generalInfoImageQueue.push(image);
+    drainGeneralInfoImageQueue();
+  }
+
+  function drainGeneralInfoImageQueue() {
+    while (generalInfoActiveLoads < GENERAL_INFO_MAX_IMAGE_LOADS && generalInfoImageQueue.length) {
+      var image = generalInfoImageQueue.shift();
+      if (!image || !image.isConnected) continue;
+      generalInfoActiveLoads++;
+      image.dataset.loading = 'true';
+      loadGeneralInfoImage(image).catch(function() {
+        handleGeneralInfoImageError(image);
+      });
+    }
+  }
+
+  function completeGeneralInfoImageRequest(image) {
+    if (image && image.dataset.loading === 'true' && Number(image.dataset.loadGeneration) === generalInfoLoadGeneration) {
+      image.dataset.loading = 'false';
+      generalInfoActiveLoads = Math.max(0, generalInfoActiveLoads - 1);
+      drainGeneralInfoImageQueue();
+    }
+  }
+
+  function handleGeneralInfoImageLoad(image) {
+    var wrapper = image.closest('.gi-img-wrap');
+    var reveal = function() {
+      if (wrapper) {
+        wrapper.classList.add('is-loaded');
+        wrapper.classList.remove('has-error');
+        wrapper.disabled = false;
+      }
+      completeGeneralInfoImageRequest(image);
+    };
+    if (image.decode) image.decode().then(reveal, reveal);
+    else reveal();
+  }
+
+  function handleGeneralInfoImageError(image) {
+    var retryCount = Number(image.dataset.retry || 0);
+    if (retryCount < 1) {
+      image.dataset.retry = '1';
+      var original = image.dataset.originalSrc || image.dataset.sourceUrl || image.src;
+      window.setTimeout(function() {
+        var separator = original.indexOf('?') === -1 ? '?' : '&';
+        image.dataset.sourceUrl = original + separator + 'retry=' + Date.now();
+        image.dataset.queued = '';
+        queueGeneralInfoImage(image);
+      }, 220);
+      return;
+    }
+    var wrapper = image.closest('.gi-img-wrap');
+    if (wrapper) {
+      wrapper.classList.add('has-error');
+      wrapper.classList.remove('is-loaded');
+      wrapper.disabled = true;
+      var fallback = wrapper.querySelector('.gi-unavailable');
+      if (fallback) fallback.classList.add('is-visible');
+    }
+    completeGeneralInfoImageRequest(image);
+  }
+
+  function ensureGeneralInfoLightbox() {
+    var lightbox = document.getElementById('generalInfoLightbox');
+    if (lightbox) return lightbox;
+    lightbox = document.createElement('div');
+    lightbox.id = 'generalInfoLightbox';
+    lightbox.className = 'gi-lightbox';
+    lightbox.hidden = true;
+    lightbox.innerHTML = '<div class="gi-lightbox-panel" role="dialog" aria-modal="true" aria-labelledby="giLightboxTitle"><header><div><span>REFERENCE INSPECTION</span><h2 id="giLightboxTitle"></h2></div><button type="button" onclick="closeGeneralInfoLightbox()" aria-label="Close image inspection">×</button></header><div class="gi-lightbox-stage"><span class="gi-image-skeleton"></span><img alt="" loading="lazy" decoding="async"></div></div>';
+    lightbox.addEventListener('click', function(event) { if (event.target === lightbox) closeGeneralInfoLightbox(); });
+    document.body.appendChild(lightbox);
+    return lightbox;
+  }
+
+  function openGeneralInfoLightbox(button) {
+    if (!button || !button.classList.contains('is-loaded')) return;
+    var item = generalInfoRenderedItems[Number(button.dataset.itemIndex)] || {};
+    var lightbox = ensureGeneralInfoLightbox();
+    var image = lightbox.querySelector('img');
+    var title = lightbox.querySelector('h2');
+    var stage = lightbox.querySelector('.gi-lightbox-stage');
+    stage.classList.remove('is-loaded', 'has-error');
+    title.textContent = item.title || 'Reference image';
+    image.alt = item.title || 'Reference image';
+    var inspectionUrl = giOptimizedImageUrl(item.img, 2000);
+    image.dataset.retry = '0';
+    image.dataset.originalSrc = inspectionUrl;
+    image.onload = function() { stage.classList.add('is-loaded'); };
+    image.onerror = function() { handleGeneralInfoLightboxError(image, stage); };
+    if (item.imageRef) {
+      fetchGeneralInfoProtectedBlobUrl(item.imageRef).then(function(objectUrl) { image.src = objectUrl; }).catch(function() { stage.classList.add('has-error'); });
+    } else {
+      image.src = inspectionUrl;
+    }
+    lightbox.hidden = false;
+    requestAnimationFrame(function() { lightbox.classList.add('is-open'); });
+  }
+
+  function handleGeneralInfoLightboxError(image, stage) {
+    if (Number(image.dataset.retry || 0) < 1) {
+      image.dataset.retry = '1';
+      window.setTimeout(function() {
+        var original = image.dataset.originalSrc || image.src;
+        image.src = original + (original.indexOf('?') === -1 ? '?' : '&') + 'retry=' + Date.now();
+      }, 220);
+      return;
+    }
+    stage.classList.add('has-error');
+  }
+
+  function closeGeneralInfoLightbox() {
+    var lightbox = document.getElementById('generalInfoLightbox');
+    if (!lightbox || lightbox.hidden) return;
+    lightbox.classList.remove('is-open');
+    window.setTimeout(function() { if (!lightbox.classList.contains('is-open')) lightbox.hidden = true; }, 180);
+  }
+
+  document.addEventListener('keydown', function(event) { if (event.key === 'Escape') closeGeneralInfoLightbox(); });
+  window.addEventListener('beforeunload', function() {
+    revokeGeneralInfoObjectUrls();
+    if (generalInfoWorker) { generalInfoWorker.terminate(); generalInfoWorker = null; }
+    if (generalInfoWorkerSourceUrl) { try { URL.revokeObjectURL(generalInfoWorkerSourceUrl); } catch (error) {} }
+  });
+
+  function renderGeneralInfoImages(response) { return renderGeneralInfoPage(response); }
 </script>

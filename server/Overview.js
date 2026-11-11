@@ -1,11 +1,8 @@
-function getOverviewData() {
+function getOverviewData_() {
   try {
-    var overviewCache = CacheService.getScriptCache();
-    var cachedOverview = overviewCache.get('iso_overview_v3');
-    if (cachedOverview) {
-      try { return JSON.parse(cachedOverview); } catch (cacheParseError) { /* rebuild below */ }
-    }
-    var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
+    var cachedOverview = ISOApp.Server.Cache.readJson('iso_overview_v3');
+    if (cachedOverview) return cachedOverview;
+    var ss = ISOApp.Server.Database.open();
     
     var sheet = null;
     var candidateNames = ['Overview P/F or data', 'Overview P/F', 'Overview'];
@@ -149,24 +146,23 @@ function getOverviewData() {
     }
 
     var overviewResult = { success: true, robots: robots, tests: tests };
-    try { overviewCache.put('iso_overview_v3', JSON.stringify(overviewResult), 60); } catch (cacheWriteError) { /* cache is optional */ }
-    return overviewResult;
+    return ISOApp.Server.Cache.writeJson('iso_overview_v3', overviewResult, 60);
   } catch (err) {
     return { success: false, error: err.toString() };
   }
 }
 
 /** Return the canonical robot list used by every ISO input form. */
-function getOverviewRobotNames() {
-  var overview = getOverviewData();
+function getOverviewRobotNames_() {
+  var overview = getOverviewData_();
   if (!overview || !overview.success) return { success: false, error: overview && overview.error ? overview.error : 'Overview data unavailable.' };
   return { success: true, names: (overview.robots || []).map(function(robot) { return robot.name; }).filter(Boolean) };
 }
 
 // BATCH UPDATER: Direct in-cell edits written simultaneously to Google Sheets
-function batchUpdateOverview(updates) {
+function batchUpdateOverview_(updates) {
   try {
-    var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
+    var ss = ISOApp.Server.Database.open();
     var candidateNames = ['Overview P/F or data', 'Overview P/F', 'Overview'];
     var sheet = null;
     var sheets = ss.getSheets();
@@ -189,7 +185,8 @@ function batchUpdateOverview(updates) {
       }
     });
 
-    try { CacheService.getScriptCache().remove('iso_overview_v3'); } catch (cacheError) { /* optional */ }
+    ISOApp.Server.Cache.remove('iso_overview_v3');
+    ISOApp.Server.Cache.remove('iso_static_input_choices');
 
     return { success: true, count: updates.length };
   } catch (err) {
@@ -198,7 +195,7 @@ function batchUpdateOverview(updates) {
 }
 
 // Add a new robot column to the Overview sheet from the dashboard UI.
-function addOverviewRobot(robot) {
+function addOverviewRobot_(robot) {
   try {
     robot = robot || {};
     var name = String(robot.name || '').trim().replace(/\s+/g, ' ');
@@ -206,7 +203,7 @@ function addOverviewRobot(robot) {
     if (!/dvt\s*[-_]?\s*\d+/i.test(name)) return { success: false, error: 'Robot name must include a DVT cohort.' };
     if (/^dvt\s*[-_]?\s*\d+/i.test(name)) name = 'AC3110-' + name;
 
-    var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
+    var ss = ISOApp.Server.Database.open();
     var candidateNames = ['Overview P/F or data', 'Overview P/F', 'Overview'];
     var sheet = null;
     ss.getSheets().some(function(s) {
@@ -316,19 +313,20 @@ function addOverviewRobot(robot) {
       else if (rowText.indexOf('temperature') !== -1) sheet.getRange(row + 1, newCol).setValue(String(robot.temp || '').trim());
       else if (rowText.indexOf('humidity') !== -1) sheet.getRange(row + 1, newCol).setValue(String(robot.humidity || '').trim());
     }
-    try { CacheService.getScriptCache().remove('iso_overview_v3'); } catch (cacheError) { /* optional */ }
+    ISOApp.Server.Cache.remove('iso_overview_v3');
+    ISOApp.Server.Cache.remove('iso_static_input_choices');
     return { success: true, name: name, column: newCol };
   } catch (err) {
     return { success: false, error: err.toString() };
   }
 }
 
-function updateOverviewRobotMetadata(payload) {
+function updateOverviewRobotMetadata_(payload) {
   try {
     payload = payload || {};
     var robotName = String(payload.robotName || '').trim();
     if (!robotName) return { success: false, error: 'Robot name is required.' };
-    var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
+    var ss = ISOApp.Server.Database.open();
     var candidateNames = ['Overview P/F or data', 'Overview P/F', 'Overview'];
     var sheet = null;
     ss.getSheets().some(function(s) {
@@ -355,18 +353,19 @@ function updateOverviewRobotMetadata(payload) {
       else if (rowText.indexOf('temperature') !== -1) sheet.getRange(row + 1, robotColumn).setValue(String(payload.temp || '').trim());
       else if (rowText.indexOf('humidity') !== -1) sheet.getRange(row + 1, robotColumn).setValue(String(payload.humidity || '').trim());
     }
-    try { CacheService.getScriptCache().remove('iso_overview_v3'); } catch (cacheError) { /* optional */ }
+    ISOApp.Server.Cache.remove('iso_overview_v3');
+    ISOApp.Server.Cache.remove('iso_static_input_choices');
     return { success: true };
   } catch (err) {
     return { success: false, error: err.toString() };
   }
 }
 
-function deleteOverviewRobot(robotName) {
+function deleteOverviewRobot_(robotName) {
   try {
     robotName = String(robotName || '').trim();
     if (!robotName) return { success: false, error: 'Robot name is required.' };
-    var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
+    var ss = ISOApp.Server.Database.open();
     var candidateNames = ['Overview P/F or data', 'Overview P/F', 'Overview'];
     var sheet = null;
     ss.getSheets().some(function(s) {
@@ -391,9 +390,28 @@ function deleteOverviewRobot(robotName) {
     }
     if (robotColumn === -1) return { success: false, error: 'Robot column not found.' };
     sheet.deleteColumn(robotColumn);
-    try { CacheService.getScriptCache().remove('iso_overview_v3'); } catch (cacheError) { /* optional */ }
+    ISOApp.Server.Cache.remove('iso_overview_v3');
+    ISOApp.Server.Cache.remove('iso_static_input_choices');
     return { success: true, name: robotName };
   } catch (err) {
     return { success: false, error: err.toString() };
   }
 }
+
+ISOApp.Services = ISOApp.Services || {};
+ISOApp.Services.Overview = Object.freeze({
+  list:getOverviewData_,
+  robotNames:getOverviewRobotNames_,
+  batchUpdate:batchUpdateOverview_,
+  addRobot:addOverviewRobot_,
+  updateRobot:updateOverviewRobotMetadata_,
+  removeRobot:deleteOverviewRobot_
+});
+
+// Public RPC adapters.
+function getOverviewData() { return ISOApp.Services.Overview.list(); }
+function getOverviewRobotNames() { return ISOApp.Services.Overview.robotNames(); }
+function batchUpdateOverview(updates) { return ISOApp.Services.Overview.batchUpdate(updates); }
+function addOverviewRobot(robot) { return ISOApp.Services.Overview.addRobot(robot); }
+function updateOverviewRobotMetadata(payload) { return ISOApp.Services.Overview.updateRobot(payload); }
+function deleteOverviewRobot(robotName) { return ISOApp.Services.Overview.removeRobot(robotName); }

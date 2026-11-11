@@ -1,107 +1,115 @@
-function getWifiData() {
-  var cache = CacheService.getScriptCache();
-  var cached = cache.get('iso_wifi_data');
-  if (cached) {
-    try { return JSON.parse(cached); } catch (cacheError) { /* rebuild */ }
+/** Wi-Fi domain service. Private helpers are enclosed; global functions are RPC adapters. */
+var ISOApp = ISOApp || {};
+ISOApp.Services = ISOApp.Services || {};
+
+ISOApp.Services.Wifi = (function() {
+  var CACHE_KEY = 'iso_wifi_data';
+  var SHEET_ALIASES = ['Wi-Fi Distance/Antenna Diversity', 'WiFi', 'Wi-Fi'];
+  var FIRST_DATA_ROW = 7;
+
+  function sheet_() {
+    return ISOApp.Server.Database.requireSheet(ISOApp.Server.Database.open(), SHEET_ALIASES, 'Wi-Fi');
   }
-  var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
-  var sheet = getSheetFlexible(ss, ['Wi-Fi Distance/Antenna Diversity', 'WiFi', 'Wi-Fi']);
-  if (!sheet) return { error: "Sheet 'Wi-Fi Distance/Antenna Diversity' not found in database." };
-  
-  var apVal = sheet.getRange('D2').getDisplayValue().trim();
-  var distVal = sheet.getRange('D3').getDisplayValue().trim();
-  var sigVal = sheet.getRange('D4').getDisplayValue().trim();
 
-  if (distVal === '' || distVal === '30.00' || distVal === '30') { distVal = '10'; }
+  function invalidate_() {
+    ISOApp.Server.Cache.remove(CACHE_KEY);
+    ISOApp.Server.Cache.remove('iso_static_input_choices');
+  }
 
-  var setupData = {
-    apName: apVal !== '' ? apVal : 'meshtest',
-    distance: distVal,
-    signal: sigVal !== '' ? sigVal : '-55'
-  };
+  function value_(value) {
+    return value === undefined || value === null ? '' : value;
+  }
 
-  var range = sheet.getDataRange();
-  var displayValues = range.getDisplayValues().slice(5); 
-  var richTextValues = range.getRichTextValues().slice(5);
-  var formulas = range.getFormulas().slice(5);
-
-  if (displayValues.length < 1) return { setup: setupData, headers: [], rows: [] };
-
-  var headers = displayValues[0];
-  var dataRows = displayValues.slice(1);
-  var richTextRows = richTextValues.slice(1);
-  var formulaRows = formulas.slice(1);
-
-  var processedRows = dataRows.map(function(row, rIdx) {
-    return row.map(function(cellVal, cIdx) {
-      var val = cellVal ? cellVal.toString().trim() : '';
-      var richText = richTextRows[rIdx] ? richTextRows[rIdx][cIdx] : null;
-      var url = richText ? richText.getLinkUrl() : null;
-
-      if (!url && formulaRows[rIdx] && formulaRows[rIdx][cIdx]) {
-        var match = formulaRows[rIdx][cIdx].match(/HYPERLINK\(\s*["']([^"']+)["']/i);
-        if (match && match[1]) { url = match[1]; }
+  function list() {
+    var cached = ISOApp.Server.Cache.readJson(CACHE_KEY);
+    if (cached) return cached;
+    try {
+      var sheet = sheet_();
+      var apValue = sheet.getRange('D2').getDisplayValue().trim();
+      var distanceValue = sheet.getRange('D3').getDisplayValue().trim();
+      var signalValue = sheet.getRange('D4').getDisplayValue().trim();
+      if (!distanceValue || distanceValue === '30.00' || distanceValue === '30') distanceValue = '10';
+      var range = sheet.getDataRange();
+      var displayValues = range.getDisplayValues().slice(5);
+      var richTextValues = range.getRichTextValues().slice(5);
+      var formulas = range.getFormulas().slice(5);
+      var result = {
+        setup: { apName: apValue || 'meshtest', distance: distanceValue, signal: signalValue || '-55' },
+        headers: displayValues.length ? displayValues[0] : [],
+        rows: []
+      };
+      if (displayValues.length > 1) {
+        result.rows = displayValues.slice(1).map(function(row, rowIndex) {
+          return row.map(function(cellValue, columnIndex) {
+            var richText = richTextValues[rowIndex + 1] ? richTextValues[rowIndex + 1][columnIndex] : null;
+            var url = richText ? richText.getLinkUrl() : null;
+            var formula = formulas[rowIndex + 1] ? formulas[rowIndex + 1][columnIndex] : '';
+            if (!url && formula) {
+              var match = formula.match(/HYPERLINK\(\s*["']([^"']+)["']/i);
+              if (match) url = match[1];
+            }
+            return url || String(cellValue || '').trim();
+          });
+        });
       }
-      return url ? url : val;
-    });
-  });
+      return ISOApp.Server.Cache.writeJson(CACHE_KEY, result, 60);
+    } catch (error) {
+      return { error: ISOApp.Server.Result.errorText(error), setup: {}, headers: [], rows: [] };
+    }
+  }
 
-  var result = { setup: setupData, headers: headers, rows: processedRows };
-  try { cache.put('iso_wifi_data', JSON.stringify(result), 60); } catch (cacheWriteError) { /* cache is optional */ }
-  return result;
-}
+  function create(payload) {
+    try {
+      payload = payload || {};
+      var sheet = sheet_();
+      var lastRow = sheet.getLastRow();
+      var width = sheet.getLastColumn();
+      sheet.getRange(lastRow, 1, 1, width).copyTo(sheet.getRange(lastRow + 1, 1));
+      var lastId = sheet.getRange(lastRow, 1).getValue();
+      var newId = typeof lastId === 'number' ? lastId + 1 : '';
+      [[1, newId], [2, payload.robotId], [3, payload.tester], [4, payload.rightAntenna],
+       [8, payload.rightLink], [10, payload.leftAntenna], [14, payload.leftLink]]
+        .forEach(function(update) { sheet.getRange(lastRow + 1, update[0]).setValue(value_(update[1])); });
+      invalidate_();
+      return ISOApp.Server.Result.ok({ row: lastRow + 1 });
+    } catch (error) {
+      return ISOApp.Server.Result.fail(error, 'Wi-Fi record could not be created.');
+    }
+  }
 
-function addWifiRecord(payload) {
-  try {
-    var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
-    var sheet = getSheetFlexible(ss, ['Wi-Fi Distance/Antenna Diversity', 'WiFi', 'Wi-Fi']);
-    if (!sheet) return { success: false, error: "Wi-Fi Sheet not found." };
-    
-    var lastRow = sheet.getLastRow();
-    var numCols = sheet.getLastColumn();
-    
-    sheet.getRange(lastRow, 1, 1, numCols).copyTo(sheet.getRange(lastRow + 1, 1));
-    
-    var lastId = sheet.getRange(lastRow, 1).getValue();
-    var newId = (typeof lastId === 'number') ? lastId + 1 : "";
-    sheet.getRange(lastRow + 1, 1).setValue(newId);
-    
-    sheet.getRange(lastRow + 1, 2).setValue(payload.robotId);        
-    sheet.getRange(lastRow + 1, 3).setValue(payload.tester);         
-    sheet.getRange(lastRow + 1, 4).setValue(payload.rightAntenna);   
-    sheet.getRange(lastRow + 1, 8).setValue(payload.rightLink || "");
-    sheet.getRange(lastRow + 1, 10).setValue(payload.leftAntenna);  
-    sheet.getRange(lastRow + 1, 14).setValue(payload.leftLink || "");
-    
-    CacheService.getScriptCache().remove('iso_wifi_data');
-    return { success: true };
-  } catch (err) { return { success: false, error: err.toString() }; }
-}
+  function update(payload) {
+    try {
+      payload = payload || {};
+      var sheet = sheet_();
+      var targetRow = Number(payload.rowIndex) + FIRST_DATA_ROW;
+      if (!isFinite(targetRow) || targetRow < FIRST_DATA_ROW) throw new Error('Invalid Wi-Fi row index.');
+      [[3, payload.tester], [4, payload.rightAntenna], [8, payload.rightLink],
+       [10, payload.leftAntenna], [14, payload.leftLink]]
+        .forEach(function(updateValue) { sheet.getRange(targetRow, updateValue[0]).setValue(value_(updateValue[1])); });
+      invalidate_();
+      return ISOApp.Server.Result.ok({ row: targetRow });
+    } catch (error) {
+      return ISOApp.Server.Result.fail(error, 'Wi-Fi record could not be updated.');
+    }
+  }
 
-function updateWifiRecord(payload) {
-  try {
-    var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
-    var sheet = getSheetFlexible(ss, ['Wi-Fi Distance/Antenna Diversity', 'WiFi', 'Wi-Fi']);
-    if (!sheet) return { success: false, error: "Wi-Fi Sheet not found." };
-    var targetRow = payload.rowIndex + 7;
-    sheet.getRange(targetRow, 3).setValue(payload.tester);          
-    sheet.getRange(targetRow, 4).setValue(payload.rightAntenna);    
-    sheet.getRange(targetRow, 8).setValue(payload.rightLink || ""); 
-    sheet.getRange(targetRow, 10).setValue(payload.leftAntenna);    
-    sheet.getRange(targetRow, 14).setValue(payload.leftLink || ""); 
-    CacheService.getScriptCache().remove('iso_wifi_data');
-    return { success: true };
-  } catch (err) { return { success: false, error: err.toString() }; }
-}
+  function remove(payload) {
+    try {
+      var targetRow = Number(payload && payload.rowIndex) + FIRST_DATA_ROW;
+      if (!isFinite(targetRow) || targetRow < FIRST_DATA_ROW) throw new Error('Invalid Wi-Fi row index.');
+      sheet_().deleteRow(targetRow);
+      invalidate_();
+      return ISOApp.Server.Result.ok({ row: targetRow });
+    } catch (error) {
+      return ISOApp.Server.Result.fail(error, 'Wi-Fi record could not be deleted.');
+    }
+  }
 
-function deleteWifiRecord(payload) {
-  try {
-    var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
-    var sheet = getSheetFlexible(ss, ['Wi-Fi Distance/Antenna Diversity', 'WiFi', 'Wi-Fi']);
-    if (!sheet) return { success: false, error: "Wi-Fi Sheet not found." };
-    var targetRow = payload.rowIndex + 7;
-    sheet.deleteRow(targetRow);
-    CacheService.getScriptCache().remove('iso_wifi_data');
-    return { success: true };
-  } catch (err) { return { success: false, error: err.toString() }; }
-}
+  return Object.freeze({ list: list, create: create, update: update, remove: remove });
+})();
+
+// Public RPC adapters. Keep these global for google.script.run compatibility.
+function getWifiData() { return ISOApp.Services.Wifi.list(); }
+function addWifiRecord(payload) { return ISOApp.Services.Wifi.create(payload); }
+function updateWifiRecord(payload) { return ISOApp.Services.Wifi.update(payload); }
+function deleteWifiRecord(payload) { return ISOApp.Services.Wifi.remove(payload); }

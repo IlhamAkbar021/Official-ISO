@@ -1,11 +1,8 @@
-function getLidarData(forceRefresh) {
-  var cache = CacheService.getScriptCache();
-  var cached = forceRefresh ? null : cache.get('iso_lidar_data');
-  if (cached) {
-    try { return JSON.parse(cached); } catch (cacheError) { /* rebuild */ }
-  }
-  var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
-  var sheet = getSheetFlexible(ss, ['lidar', 'LiDAR']);
+function getLidarData_(forceRefresh) {
+  var cached = forceRefresh ? null : ISOApp.Server.Cache.readJson('iso_lidar_data');
+  if (cached) return cached;
+  var ss = ISOApp.Server.Database.open();
+  var sheet = ISOApp.Server.Database.findSheet(ss, ['lidar', 'LiDAR']);
   if (!sheet) return { error: "Sheet 'lidar' not found in database." };
   
   var range = sheet.getDataRange();
@@ -71,8 +68,7 @@ function getLidarData(forceRefresh) {
   });
 
   var result = { isSplit: true, accuracy: { headers: accuracyHeaders, rows: accuracyRows }, tilt: { headers: tiltHeaders, rows: tiltRows } };
-  try { cache.put('iso_lidar_data', JSON.stringify(result), 60); } catch (cacheWriteError) { /* cache is optional */ }
-  return result;
+  return ISOApp.Server.Cache.writeJson('iso_lidar_data', result, 60);
 }
 
 function normalizeLidarImportPayload_(payload) {
@@ -85,7 +81,8 @@ function normalizeLidarImportPayload_(payload) {
   normalized.tester = String(normalized.tester || 'Unassigned').trim();
   normalized.swVer = String(normalized.swVer || '').trim();
   if (normalized.lidarType === 'tilt') {
-    var brickCount = Number(normalized.bricks);
+    var brickValue = String(normalized.bricks === undefined || normalized.bricks === null ? '' : normalized.bricks).trim();
+    var brickCount = brickValue === '' ? NaN : Number(brickValue);
     var tiltProfile = null;
     if (isFinite(brickCount) && brickCount >= 0 && brickCount <= 8 && Math.floor(brickCount) === brickCount) {
       tiltProfile = {
@@ -115,14 +112,32 @@ function normalizeLidarImportPayload_(payload) {
   return normalized;
 }
 
-function addLidarRecord(payload) {
+// The LiDAR sheet also contains summaries and formatting far to the right or
+// below the records. getLastRow() counts those cells, so use the first empty
+// row in the actual record area (A:V) and insert there. This keeps new records
+// directly after the existing data while shifting any later auxiliary content
+// down intact.
+function findLidarInsertRow_(sheet) {
+  var firstDataRow = 3;
+  var scanLastRow = Math.max(sheet.getLastRow(), firstDataRow);
+  var width = Math.min(Math.max(sheet.getLastColumn(), 22), 22);
+  var values = sheet.getRange(firstDataRow, 1, scanLastRow - firstDataRow + 1, width).getDisplayValues();
+  for (var i = 0; i < values.length; i++) {
+    var hasRecordData = values[i].some(function(value) { return String(value || '').trim() !== ''; });
+    if (!hasRecordData) return firstDataRow + i;
+  }
+  return scanLastRow + 1;
+}
+
+function addLidarRecord_(payload) {
   try {
     payload = normalizeLidarImportPayload_(payload);
-    var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
-    var sheet = getSheetFlexible(ss, ['lidar', 'LiDAR']);
+    var ss = ISOApp.Server.Database.open();
+    var sheet = ISOApp.Server.Database.findSheet(ss, ['lidar', 'LiDAR']);
     if (!sheet) return { success: false, error: "LiDAR Sheet not found." };
 
     var lastRow = sheet.getLastRow();
+    var insertRow = findLidarInsertRow_(sheet);
     var numCols = sheet.getLastColumn();
     var writtenFirstRow = lastRow + 1;
 
@@ -140,8 +155,8 @@ function addLidarRecord(payload) {
           }
         }
       }
-      sheet.insertRowsAfter(lastRow, 3);
-      var firstRow = lastRow + 1;
+      sheet.insertRowsBefore(insertRow, 3);
+      var firstRow = insertRow;
       writtenFirstRow = firstRow;
       sheet.getRange(templateStartRow, 1, 3, numCols).copyTo(sheet.getRange(firstRow, 1, 3, numCols));
       var options = ['A - 5', 'B - 10', 'C - 15'];
@@ -176,8 +191,9 @@ function addLidarRecord(payload) {
       }
       if (colBricksIdx === -1) colBricksIdx = 11;
       var values = sheet.getRange(3, 1, Math.max(1, lastRow - 2), Math.min(numCols, 4)).getDisplayValues();
-      var targetRow = -1;
+      var targetRow = Number(payload.targetRow) >= 3 ? Number(payload.targetRow) : -1;
       for (var rowOffset = 0; rowOffset < values.length; rowOffset++) {
+        if (targetRow >= 3) break;
         var storedDate = String(values[rowOffset][1] || '').trim().replace(/\//g, '-');
         var requestedDate = String(payload.date || '').trim().replace(/\//g, '-');
         if (String(values[rowOffset][0] || '').trim().toUpperCase() === String(payload.robotId || '').trim().toUpperCase() &&
@@ -187,10 +203,24 @@ function addLidarRecord(payload) {
         }
       }
       if (targetRow === -1) {
-        sheet.insertRowsAfter(lastRow, 3);
-        targetRow = lastRow + 1;
+        sheet.insertRowsBefore(insertRow, 3);
+        targetRow = insertRow;
         sheet.getRange(targetRow, 1, 3, numCols).copyTo(sheet.getRange(targetRow, 1, 3, numCols));
-        sheet.getRange(targetRow, 1, 3, 4).setValues([[payload.robotId || '', payload.date || '', payload.swVer || '', payload.tester || ''], ['', '', '', ''], ['', '', '', '']]);
+        // The copied template may contain vertically merged A:D cells. Break
+        // those merges before writing, then recreate the intended shared
+        // metadata cells. setValues() across a merged 3-row range throws and
+        // makes the Tilt & Angle save appear to do nothing.
+        [payload.robotId || '', payload.date || '', payload.swVer || '', payload.tester || ''].forEach(function(value, columnIndex) {
+          var sharedRange = sheet.getRange(targetRow, columnIndex + 1, 3, 1);
+          sharedRange.breakApart();
+          sharedRange.clearContent();
+          try {
+            sharedRange.mergeVertically();
+            sheet.getRange(targetRow, columnIndex + 1).setValue(value);
+          } catch (mergeError) {
+            sharedRange.setValues([[value], [''], ['']]);
+          }
+        });
       }
       writtenFirstRow = targetRow;
       sheet.getRange(targetRow, colBricksIdx + 1, 1, 8).setValues([[
@@ -200,37 +230,61 @@ function addLidarRecord(payload) {
     }
 
     SpreadsheetApp.flush();
-    CacheService.getScriptCache().remove('iso_lidar_data');
+    ISOApp.Server.Cache.remove('iso_lidar_data');
+    ISOApp.Server.Cache.remove('iso_static_input_choices');
     return { success: true, firstRow: writtenFirstRow };
   } catch (err) { return { success: false, error: err.toString() }; }
 }
 
-function smartImportLidarRecord(payload) {
+function smartImportLidarRecord_(payload) {
   try {
     var normalized = normalizeLidarImportPayload_(payload);
     if (!/^AC3110-DVT\d+(?:-\d+)?$/i.test(normalized.robotId)) {
       return { success: false, error: 'Robot ID must match AC3110-DVTn or AC3110-DVTn-n.' };
     }
-    if (normalized.lidarType === 'tilt') {
+    var includeAccuracy = payload && payload.includeAccuracy !== undefined
+      ? payload.includeAccuracy === true
+      : normalized.lidarType !== 'tilt';
+    var includeTilt = payload && payload.includeTilt !== undefined
+      ? payload.includeTilt === true
+      : normalized.lidarType === 'tilt';
+    if (!includeAccuracy && !includeTilt) {
+      return { success: false, error: 'Enter at least one Accuracy or Tilt & Angle value before saving.' };
+    }
+    if (includeTilt) {
       if (String(normalized.detectedDist || '').trim() === '' && String(normalized.bricks || '').trim() === '') {
         return { success: false, error: 'Tilt import requires a detected distance or bricks value.' };
       }
-      if (!Number.isInteger(Number(normalized.bricks)) || Number(normalized.bricks) < 0 || Number(normalized.bricks) > 8) {
+      if (String(normalized.bricks || '').trim() !== '' && (!Number.isInteger(Number(normalized.bricks)) || Number(normalized.bricks) < 0 || Number(normalized.bricks) > 8)) {
         return { success: false, error: 'Tilt import requires Bricks to be a whole number from 0 to 8.' };
       }
     }
-    var result = addLidarRecord(normalized);
-    if (!result || !result.success) return result || { success: false, error: 'LiDAR import failed.' };
-    return { success: true, imported: { lidarType: normalized.lidarType, robotId: normalized.robotId, date: normalized.date, firstRow: result.firstRow }, data: getLidarData() };
+    var accuracyResult = null;
+    if (includeAccuracy) {
+      var accuracyPayload = Object.assign({}, normalized, { lidarType: 'accuracy' });
+      accuracyResult = addLidarRecord_(accuracyPayload);
+      if (!accuracyResult || !accuracyResult.success) return accuracyResult || { success: false, error: 'Accuracy record save failed.' };
+    }
+    var tiltResult = null;
+    if (includeTilt) {
+      var tiltPayload = normalizeLidarImportPayload_(Object.assign({}, payload, {
+        lidarType: 'tilt',
+        targetRow: accuracyResult && accuracyResult.firstRow ? accuracyResult.firstRow : payload.targetRow
+      }));
+      tiltResult = addLidarRecord_(tiltPayload);
+      if (!tiltResult || !tiltResult.success) return tiltResult || { success: false, error: 'Tilt & Angle record save failed.' };
+    }
+    var finalResult = accuracyResult || tiltResult;
+    return { success: true, imported: { lidarType: includeAccuracy && includeTilt ? 'combined' : (includeTilt ? 'tilt' : 'accuracy'), robotId: normalized.robotId, date: normalized.date, firstRow: finalResult.firstRow }, data: getLidarData_(true) };
   } catch (err) {
     return { success: false, error: err.toString() };
   }
 }
 
-function deleteLidarRecord(payload) {
+function deleteLidarRecord_(payload) {
   try {
-    var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
-    var sheet = getSheetFlexible(ss, ['lidar', 'LiDAR']);
+    var ss = ISOApp.Server.Database.open();
+    var sheet = ISOApp.Server.Database.findSheet(ss, ['lidar', 'LiDAR']);
     if (!sheet) return { success: false, error: "LiDAR Sheet not found." };
     var targetRow = Number(payload.rowIndex) + 3;
     if (payload.robotId) {
@@ -258,51 +312,187 @@ function deleteLidarRecord(payload) {
       sheet.getRange(targetRow, brickCol + 1, 1, 8).clearContent();
     }
     SpreadsheetApp.flush();
-    CacheService.getScriptCache().remove('iso_lidar_data');
+    ISOApp.Server.Cache.remove('iso_lidar_data');
+    ISOApp.Server.Cache.remove('iso_static_input_choices');
     return { success: true };
   } catch (err) { return { success: false, error: err.toString() }; }
 }
 
-function updateLidarRecord(payload) {
-  try {
-    payload = payload || {};
-    var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
-    var sheet = getSheetFlexible(ss, ['lidar', 'LiDAR']);
-    if (!sheet) return { success:false, error:'LiDAR sheet not found.' };
-    var type = payload.lidarType === 'tilt' ? 'tilt' : 'accuracy';
+/** LiDAR orchestration service used by public RPC adapters in Code.js. */
+ISOApp.Services = ISOApp.Services || {};
+ISOApp.Services.Lidar = (function() {
+  function owns_(object, key) {
+    return Object.prototype.hasOwnProperty.call(object || {}, key);
+  }
+
+  function valueOrExisting_(object, key, existingValue) {
+    return owns_(object, key) ? object[key] : existingValue;
+  }
+
+  function normalizedDate_(value) {
+    return String(value || '').trim().replace(/\//g, '-');
+  }
+
+  function accuracyRow_(sheet, payload) {
     var row = Number(payload.rowIndex) + 3;
-    if (type === 'tilt') {
-      var allValues = sheet.getDataRange().getDisplayValues();
-      var wantedRobot = String(payload.robotId || '').trim().toUpperCase();
-      var wantedDate = String(payload.date || '').trim().replace(/\//g, '-');
-      row = -1;
-      for (var locateIndex = 2; locateIndex < allValues.length; locateIndex++) {
-        var sheetRobot = String(allValues[locateIndex][0] || '').trim().toUpperCase();
-        var sheetDate = String(allValues[locateIndex][1] || '').trim().replace(/\//g, '-');
-        if (sheetRobot === wantedRobot && sheetDate === wantedDate) { row = locateIndex + 1; break; }
+    return isFinite(row) && row >= 3 && row <= sheet.getLastRow() ? row : -1;
+  }
+
+  function tiltRow_(sheet, payload, brickColumn) {
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 3) return -1;
+    var values = sheet.getRange(3, 1, lastRow - 2, sheet.getLastColumn()).getDisplayValues();
+    var tiltIndex = Number(payload.rowIndex);
+    var visibleTiltIndex = -1;
+
+    // rowIndex on the Tilt table is an index in the filtered Tilt dataset,
+    // not a physical Sheet row. Resolve that mapping before using identity.
+    if (isFinite(tiltIndex) && tiltIndex >= 0) {
+      for (var i = 0; i < values.length; i++) {
+        var hasTilt = String(values[i][brickColumn] || '').trim() !== '' ||
+          String(values[i][brickColumn + 1] || '').trim() !== '' ||
+          String(values[i][brickColumn + 4] || '').trim() !== '';
+        if (hasTilt) {
+          visibleTiltIndex++;
+          if (visibleTiltIndex === tiltIndex) return i + 3;
+        }
       }
     }
-    if (!isFinite(row) || row < 3) return { success:false, error:'The selected LiDAR record could not be located.' };
-    if (type === 'accuracy') {
-      var shared = [[payload.date || '', payload.swVer || '', payload.tester || '']];
-      sheet.getRange(row, 2, 1, 3).setValues(shared);
-      var accuracyRuns = [payload.runA || {}, payload.runB || {}, payload.runC || {}];
-      for (var runIndex = 0; runIndex < 3; runIndex++) {
-        sheet.getRange(row + runIndex, 6, 1, 3).setValues([[
-          accuracyRuns[runIndex].distance || '',
-          accuracyRuns[runIndex].std || '',
-          accuracyRuns[runIndex].validPoints || ''
-        ]]);
-      }
-    } else {
-      var headers = sheet.getRange(2, 1, 1, sheet.getLastColumn()).getValues()[0];
-      var brickCol = headers.findIndex(function(h){ return String(h || '').toLowerCase().indexOf('brick') !== -1; });
-      if (brickCol < 0) brickCol = 11;
-      sheet.getRange(row, 2, 1, 3).setValues([[payload.date || '', payload.swVer || '', payload.tester || '']]);
-      sheet.getRange(row, brickCol + 1, 1, 8).setValues([[payload.bricks || '', payload.detectedDist || '', payload.heightFrom || '', payload.heightTo || '', payload.tiltStatus || '', payload.angleFrom || '', payload.angleTo || '', payload.note || '']]);
+
+    var wantedRobot = String(payload.robotId || '').trim().toUpperCase();
+    var wantedDate = normalizedDate_(payload.date);
+    for (var rowIndex = 0; rowIndex < values.length; rowIndex++) {
+      var actualRobot = String(values[rowIndex][0] || '').trim().toUpperCase();
+      var actualDate = normalizedDate_(values[rowIndex][1]);
+      if (actualRobot === wantedRobot && (!wantedDate || actualDate === wantedDate)) return rowIndex + 3;
     }
-    SpreadsheetApp.flush();
-    CacheService.getScriptCache().remove('iso_lidar_data');
-    return {success:true, data:getLidarData(true)};
-  } catch (err) { return {success:false, error:String(err)}; }
-}
+    return -1;
+  }
+
+  function brickColumn_(sheet) {
+    var headers = sheet.getRange(2, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    for (var i = 0; i < headers.length; i++) {
+      if (String(headers[i] || '').toLowerCase().indexOf('brick') !== -1) return i;
+    }
+    return 11;
+  }
+
+  function updateAccuracy_(sheet, payload) {
+    var row = accuracyRow_(sheet, payload);
+    if (row < 3) throw new Error('The selected LiDAR accuracy record could not be located.');
+
+    var sharedExisting = sheet.getRange(row, 1, 1, 4).getValues()[0];
+    sheet.getRange(row, 1, 1, 4).setValues([[
+      valueOrExisting_(payload, 'robotId', sharedExisting[0]),
+      valueOrExisting_(payload, 'date', sharedExisting[1]),
+      valueOrExisting_(payload, 'swVer', sharedExisting[2]),
+      valueOrExisting_(payload, 'tester', sharedExisting[3])
+    ]]);
+
+    var runs = [payload.runA || {}, payload.runB || {}, payload.runC || {}];
+    var currentRuns = sheet.getRange(row, 6, 3, 3).getValues();
+    var nextRuns = runs.map(function(run, index) {
+      return [
+        valueOrExisting_(run, 'distance', currentRuns[index][0]),
+        valueOrExisting_(run, 'std', currentRuns[index][1]),
+        valueOrExisting_(run, 'validPoints', currentRuns[index][2])
+      ];
+    });
+    sheet.getRange(row, 6, 3, 3).setValues(nextRuns);
+    return row;
+  }
+
+  function updateTilt_(sheet, payload, preferredRow) {
+    payload = normalizeLidarImportPayload_(payload);
+    var brickColumn = brickColumn_(sheet);
+    var row = preferredRow >= 3 ? preferredRow : tiltRow_(sheet, payload, brickColumn);
+    if (row < 3) throw new Error('The selected LiDAR tilt record could not be located.');
+
+    var sharedExisting = sheet.getRange(row, 1, 1, 4).getValues()[0];
+    sheet.getRange(row, 1, 1, 4).setValues([[
+      valueOrExisting_(payload, 'robotId', sharedExisting[0]),
+      valueOrExisting_(payload, 'date', sharedExisting[1]),
+      valueOrExisting_(payload, 'swVer', sharedExisting[2]),
+      valueOrExisting_(payload, 'tester', sharedExisting[3])
+    ]]);
+
+    var current = sheet.getRange(row, brickColumn + 1, 1, 8).getValues()[0];
+    var keys = ['bricks', 'detectedDist', 'heightFrom', 'heightTo', 'tiltStatus', 'angleFrom', 'angleTo', 'note'];
+    var next = keys.map(function(key, index) { return valueOrExisting_(payload, key, current[index]); });
+    sheet.getRange(row, brickColumn + 1, 1, 8).setValues([next]);
+    return row;
+  }
+
+  function save(rowData) {
+    try {
+      rowData = rowData || {};
+      if (rowData.action !== 'updateLidarRow') return ISOApp.Server.Result.fail('Unsupported LiDAR save action.');
+      if (!rowData.accuracyPayload && !rowData.tiltPayload) {
+        return ISOApp.Server.Result.fail('No LiDAR row data was provided.');
+      }
+
+      var spreadsheet = ISOApp.Server.Database.open();
+      var sheet = ISOApp.Server.Database.requireSheet(spreadsheet, ['lidar', 'LiDAR'], 'LiDAR');
+      var accuracyRow = -1;
+      var updated = [];
+
+      if (rowData.accuracyPayload) {
+        var accuracyPayload = rowData.accuracyPayload;
+        var requestedAccuracyRow = Number(accuracyPayload.rowIndex) + 3;
+        var shouldCreateAccuracy = accuracyPayload.isNew === true || !isFinite(requestedAccuracyRow) || requestedAccuracyRow < 3 || requestedAccuracyRow > sheet.getLastRow();
+        if (shouldCreateAccuracy) {
+          var createdAccuracy = addLidarRecord_(accuracyPayload);
+          if (!createdAccuracy || !createdAccuracy.success) throw new Error(createdAccuracy && createdAccuracy.error || 'LiDAR accuracy record could not be appended.');
+          accuracyRow = Number(createdAccuracy.firstRow || -1);
+          updated.push({ type: 'accuracy', row: accuracyRow, created: true });
+        } else {
+          accuracyRow = updateAccuracy_(sheet, accuracyPayload);
+          updated.push({ type: 'accuracy', row: accuracyRow, created: false });
+        }
+      }
+      if (rowData.tiltPayload) {
+        var tiltPayload = rowData.tiltPayload;
+        var shouldCreateTilt = tiltPayload.isNew === true;
+        var tiltRow = -1;
+        if (!shouldCreateTilt) {
+          var tiltBrickColumn = brickColumn_(sheet);
+          var normalizedTiltPayload = normalizeLidarImportPayload_(tiltPayload);
+          var existingTiltRow = tiltRow_(sheet, normalizedTiltPayload, tiltBrickColumn);
+          if (existingTiltRow >= 3) tiltRow = updateTilt_(sheet, tiltPayload, accuracyRow);
+        }
+        if (tiltRow < 3) {
+          var createdTilt = addLidarRecord_(tiltPayload);
+          if (!createdTilt || !createdTilt.success) throw new Error(createdTilt && createdTilt.error || 'LiDAR tilt record could not be appended.');
+          tiltRow = Number(createdTilt.firstRow || -1);
+          updated.push({ type: 'tilt', row: tiltRow, created: true });
+        } else {
+          updated.push({ type: 'tilt', row: tiltRow, created: false });
+        }
+      }
+
+      SpreadsheetApp.flush();
+      ISOApp.Server.Cache.remove('iso_lidar_data');
+      ISOApp.Server.Cache.remove('iso_static_input_choices');
+      return ISOApp.Server.Result.ok({ updated: updated, data: getLidarData_(true) });
+    } catch (error) {
+      return ISOApp.Server.Result.fail(error, 'LiDAR save failed.');
+    }
+  }
+
+  function update(payload) {
+    payload = payload || {};
+    var request = { action: 'updateLidarRow' };
+    if (payload.lidarType === 'tilt') request.tiltPayload = payload;
+    else request.accuracyPayload = payload;
+    return save(request);
+  }
+
+  return Object.freeze({
+    list:getLidarData_,
+    create:addLidarRecord_,
+    smartImport:smartImportLidarRecord_,
+    remove:deleteLidarRecord_,
+    update:update,
+    save:save
+  });
+})();

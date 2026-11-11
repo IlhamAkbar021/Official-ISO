@@ -30,7 +30,7 @@
           '<div class="form-group" style="flex:1;"><label>Date</label><input type="date" id="l_a_date" value="' + today + '" required>' +
         '</div>' +
         '<div class="flex-row">' +
-          '<div class="form-group" style="flex:1;"><label>SW Version</label><input type="text" id="l_a_sw" placeholder="e.g. 2026-27-02-2" required></div>' +
+          '<div class="form-group" style="flex:1;"><label>SW Version</label><input type="text" id="l_a_sw" list="registeredSwVersionList" onfocus="hydrateRegisteredSwVersionList()" placeholder="e.g. 2026-27-02-2" required></div>' +
           '<div class="form-group" style="flex:1;"><label>Tester Name</label><input type="text" id="l_a_tester" list="registeredTesterList" onfocus="hydrateRegisteredTesterList()" placeholder="e.g. Mike" required></div>' +
         '</div>' +
 
@@ -95,7 +95,7 @@
       '<div class="form-group"><label>Robot ID (Read Only)</label><input type="text" value="' + (row[0] || '') + '" disabled style="opacity:0.7;"></div>' +
       '<div class="flex-row">' +
         '<div class="form-group" style="flex:1;"><label>Date</label><input type="date" id="l_a_date" value="' + String(row[1] || '').replace(/\//g,'-') + '">' +
-        '<div class="form-group" style="flex:1;"><label>SW Version</label><input type="text" id="l_a_sw" value="' + (row[2] || '') + '"></div>' +
+        '<div class="form-group" style="flex:1;"><label>SW Version</label><input type="text" id="l_a_sw" list="registeredSwVersionList" onfocus="hydrateRegisteredSwVersionList()" value="' + (row[2] || '') + '"></div>' +
       '</div>' +
       '<div class="form-group"><label>Tester Name</label><input type="text" id="l_a_tester" list="registeredTesterList" onfocus="hydrateRegisteredTesterList()" value="' + (row[3] || '') + '" required></div>';
     
@@ -181,7 +181,7 @@
     var liveTesters = typeof registeredTesterNames !== 'undefined' && Array.isArray(registeredTesterNames) ? registeredTesterNames : [];
     try { cachedTesters = JSON.parse(localStorage.getItem('registered_testers_cache') || '[]'); } catch (e) { cachedTesters = []; }
     return {
-      lidarType: typeof activeLidarSubTab !== 'undefined' && activeLidarSubTab === 'tilt' ? 'tilt' : 'accuracy', robotId: '', date: date, swVer: '',
+      lidarType: typeof activeLidarSubTab !== 'undefined' && activeLidarSubTab === 'tilt' ? 'tilt' : 'accuracy', robotId: localStorage.getItem('last_lidar_robot') || '', date: date, swVer: '',
       tester: localStorage.getItem('last_lidar_tester') || liveTesters[0] || cachedTesters[0] || '',
       runA: { distance:'', std:'0.00', validPoints:'9' }, runB: { distance:'', std:'0.00', validPoints:'9' }, runC: { distance:'', std:'0.00', validPoints:'9' },
       bricks:'', detectedDist:'', heightFrom:'', heightTo:'', tiltStatus:'', angleFrom:'', angleTo:'', note:''
@@ -377,12 +377,22 @@
   }
 
   function openLidarSmartPasteModal(sourceText) {
+    loadRegisteredRobotNames();
     var modal = ensureLidarSmartImportModal();
     var source = document.getElementById('lidarSmartSource');
+    // Accuracy and optional Tilt & Angle inputs share one combined form.
+    var selectedType = 'accuracy';
+    lidarSmartDrafts = { accuracy: null, tilt: null };
     source.value = sourceText || '';
     lidarSmartParsedData = parseLidarClipboard(source.value);
+    lidarSmartParsedData.lidarType = selectedType;
     renderLidarSmartPreview();
     modal.style.display = 'flex';
+    var subtitle = modal.querySelector('header p');
+    if (subtitle) subtitle.innerText = 'Enter shared robot details once, then add Accuracy and/or Tilt & Angle values below.';
+    source.placeholder = selectedType === 'tilt'
+      ? 'Optional robot output or notes for the Tilt & Angle record'
+      : '5.02  0.00  8\n10.02  0.00  8\n15.02  0.00  8';
     var smartTitle = document.getElementById('lidarSmartImportTitle');
     if (smartTitle) smartTitle.innerText = 'Add Record';
     setTimeout(function() {
@@ -397,7 +407,9 @@
   }
 
   function parseLidarSmartPasteSource() {
+    var selectedType = 'accuracy';
     lidarSmartParsedData = parseLidarClipboard(document.getElementById('lidarSmartSource').value);
+    lidarSmartParsedData.lidarType = selectedType;
     renderLidarSmartPreview();
   }
 
@@ -419,17 +431,15 @@
 
   function renderLidarSmartPreview() {
     var data = lidarSmartParsedData || getLidarSmartDefaults();
-    var commonFields = smartImportInput('smart_robot_id','Robot ID',data.robotId,'text','required pattern="AC3110-DVT[0-9]+(-[0-9]+)?"') + smartImportInput('smart_date','Date',data.date,'text','required') + smartImportInput('smart_sw','SW Version',data.swVer) + smartImportInput('smart_tester','Tester',data.tester,'text','required list="registeredTesterList"');
-    var common = data.lidarType === 'tilt'
-      ? '<div class="smart-import-linked-record"><strong>Linked Accuracy record</strong><span>' + escapeHtml(data.robotId || 'Robot') + ' · ' + escapeHtml(data.date || 'Date') + ' · ' + escapeHtml(data.tester || 'Tester') + '</span></div><div class="smart-import-common smart-import-common-hidden">' + commonFields + '</div>'
-      : '<div class="smart-import-common">' + commonFields + '</div>';
-    var html = '<div class="smart-import-type"><label><span>Record type</span><select id="smart_lidar_type" onchange="changeLidarSmartType(this.value)"><option value="accuracy"' + (data.lidarType === 'accuracy' ? ' selected' : '') + '>Accuracy Collection</option><option value="tilt"' + (data.lidarType === 'tilt' ? ' selected' : '') + '>Tilt & Angle</option></select></label><span class="smart-parser-state">Parsed automatically · editable</span></div>' + common;
-    if (data.lidarType === 'accuracy') {
-      html += '<div class="smart-sequence-wrap"><table class="smart-sequence-table"><thead><tr><th>Sequence</th><th>Target</th><th>Measured (m)</th><th>Delta / Diff</th><th>Samples</th><th>Auto-status</th></tr></thead><tbody>' +
-        renderLidarSequenceRow('5','A - 5M',5,data.runA) + renderLidarSequenceRow('10','B - 10M',10,data.runB) + renderLidarSequenceRow('15','C - 15M',15,data.runC) + '</tbody></table><p class="sequence-help">Tolerance: Pass when |Measured − Target| ≤ 0.05 m. Clipboard offset is preserved for the sheet STD/Offset column.</p></div>';
-    } else {
-      html += '<div class="smart-import-tilt">' + smartImportInput('smart_bricks','Bricks',data.bricks,'number','min="0" max="8" step="1" oninput="updateLidarSmartPreviewBadges()"') + smartImportInput('smart_detected','Detected Distance (m)',data.detectedDist,'number','step="0.01"') + smartImportInput('smart_note','Note / Link',data.note) + '</div>';
-    }
+    var testerAttrs = 'list="registeredTesterList"';
+    var commonFields = smartImportInput('smart_robot_id','Robot ID',data.robotId,'text','required pattern="AC3110-DVT[0-9]+(-[0-9]+)?" list="registeredRobotList" onfocus="hydrateRegisteredRobotList()"') + smartImportInput('smart_date','Date',data.date,'text','required') + smartImportInput('smart_sw','SW Version',data.swVer,'text','list="registeredSwVersionList" onfocus="hydrateRegisteredSwVersionList()"') + smartImportInput('smart_tester','Tester',data.tester,'text',testerAttrs);
+    var html = '<div class="smart-import-type"><div class="smart-import-mode"><span>Shared record details</span><strong>Used for Accuracy + Tilt</strong></div><span class="smart-parser-state">Enter common details once</span></div>' +
+      '<div class="smart-import-common">' + commonFields + '</div>' +
+      '<section class="smart-import-section"><div class="smart-import-section-heading"><div><strong>Accuracy Collection</strong><span>5 m · 10 m · 15 m</span></div><small>Optional if adding Tilt only</small></div>' +
+      '<div class="smart-sequence-wrap"><table class="smart-sequence-table"><thead><tr><th>Sequence</th><th>Target</th><th>Measured (m)</th><th>Delta / Diff</th><th>Samples</th><th>Auto-status</th></tr></thead><tbody>' +
+      renderLidarSequenceRow('5','A - 5M',5,data.runA) + renderLidarSequenceRow('10','B - 10M',10,data.runB) + renderLidarSequenceRow('15','C - 15M',15,data.runC) + '</tbody></table><p class="sequence-help">Tolerance: Pass when |Measured − Target| ≤ 0.05 m. Clipboard offset is preserved for the sheet STD/Offset column.</p></div></section>' +
+      '<section class="smart-import-section smart-import-tilt-section"><div class="smart-import-section-heading"><div><strong>Tilt &amp; Angle</strong><span>Optional · saved to the same robot record</span></div><small>Fill only the fields you have</small></div>' +
+      '<div class="smart-import-tilt">' + smartImportInput('smart_bricks','Bricks',data.bricks,'number','min="0" max="8" step="1"') + smartImportInput('smart_detected','Detected Distance (m)',data.detectedDist,'number','step="0.01"') + smartImportInput('smart_note','Note / Link',data.note) + '</div></section>';
     document.getElementById('lidarSmartPreview').innerHTML = html;
     var commitButton = document.getElementById('lidarSmartCommit');
     if (commitButton) commitButton.innerText = 'Save Record';
@@ -437,18 +447,17 @@
   }
 
   function collectLidarSmartForm(forcedType) {
-    var typeField = document.getElementById('smart_lidar_type');
-    var type = forcedType || (typeField ? typeField.value : 'accuracy');
     var value = function(id) { var field = document.getElementById(id); return field ? field.value.trim() : ''; };
     var data = getLidarSmartDefaults();
-    data.lidarType = type; data.robotId = normalizeSmartRobotId(value('smart_robot_id')) || value('smart_robot_id').toUpperCase(); data.date = value('smart_date'); data.swVer = value('smart_sw'); data.tester = value('smart_tester');
-    if (type === 'accuracy') {
-      data.runA.distance = value('smart_5m'); data.runA.std = value('smart_5m_offset') || '0.00'; data.runA.validPoints = value('smart_5m_samples');
-      data.runB.distance = value('smart_10m'); data.runB.std = value('smart_10m_offset') || '0.00'; data.runB.validPoints = value('smart_10m_samples');
-      data.runC.distance = value('smart_15m'); data.runC.std = value('smart_15m_offset') || '0.00'; data.runC.validPoints = value('smart_15m_samples');
-    } else {
-      data.bricks = value('smart_bricks'); data.detectedDist = value('smart_detected'); data.heightFrom = value('smart_height_from'); data.heightTo = value('smart_height_to'); data.angleFrom = value('smart_angle_from'); data.angleTo = value('smart_angle_to'); data.tiltStatus = value('smart_tilt_status'); data.note = value('smart_note');
-    }
+    data.lidarType = 'accuracy';
+    data.robotId = normalizeSmartRobotId(value('smart_robot_id')) || value('smart_robot_id').toUpperCase();
+    data.date = value('smart_date'); data.swVer = value('smart_sw'); data.tester = value('smart_tester') || 'Unassigned';
+    data.runA.distance = value('smart_5m'); data.runA.std = value('smart_5m_offset') || '0.00'; data.runA.validPoints = value('smart_5m_samples');
+    data.runB.distance = value('smart_10m'); data.runB.std = value('smart_10m_offset') || '0.00'; data.runB.validPoints = value('smart_10m_samples');
+    data.runC.distance = value('smart_15m'); data.runC.std = value('smart_15m_offset') || '0.00'; data.runC.validPoints = value('smart_15m_samples');
+    data.bricks = value('smart_bricks'); data.detectedDist = value('smart_detected'); data.note = value('smart_note');
+    data.includeAccuracy = [data.runA.distance, data.runB.distance, data.runC.distance].some(function(v) { return v !== ''; });
+    data.includeTilt = [data.bricks, data.detectedDist, data.note].some(function(v) { return v !== ''; });
     return data;
   }
 
@@ -466,9 +475,8 @@
   }
 
   function updateLidarSmartPreviewBadges() {
-    var type = document.getElementById('smart_lidar_type');
-    if (!type) return;
-    if (type.value === 'accuracy') {
+    var type = lidarSmartParsedData && lidarSmartParsedData.lidarType || (typeof activeLidarSubTab !== 'undefined' && activeLidarSubTab === 'tilt' ? 'tilt' : 'accuracy');
+    if (type === 'accuracy') {
       [[5,'smart_5m','smart_delta_5','smart_status_5'],[10,'smart_10m','smart_delta_10','smart_status_10'],[15,'smart_15m','smart_delta_15','smart_status_15']].forEach(function(item) {
         var field = document.getElementById(item[1]);
         var deltaCell = document.getElementById(item[2]);
@@ -520,30 +528,58 @@
     if (form && form.reportValidity && !form.reportValidity()) return;
     var payload = collectLidarSmartForm();
     if (!/^AC3110-DVT\d+(?:-\d+)?$/i.test(payload.robotId)) { alert('Robot ID must match AC3110-DVTn or AC3110-DVTn-n.'); return; }
-    if (payload.lidarType === 'tilt' && (!Number.isInteger(Number(payload.bricks)) || Number(payload.bricks) < 0 || Number(payload.bricks) > 8)) { alert('Enter Bricks as a whole number from 0 to 8.'); return; }
+    if (!payload.includeAccuracy && !payload.includeTilt) { alert('Enter at least one Accuracy value or one Tilt & Angle value before saving.'); return; }
+    if (payload.includeTilt && !payload.bricks && !payload.detectedDist) { alert('Enter Bricks or Detected Distance to save Tilt & Angle.'); return; }
+    if (payload.includeTilt && payload.bricks !== '' && (!Number.isInteger(Number(payload.bricks)) || Number(payload.bricks) < 0 || Number(payload.bricks) > 8)) { alert('Bricks must be a whole number from 0 to 8.'); return; }
     localStorage.setItem('last_lidar_tester', payload.tester);
     localStorage.setItem('last_lidar_robot', payload.robotId);
     var button = document.getElementById('lidarSmartCommit');
     button.disabled = true; button.innerText = 'Importing…';
+    var previousResponse = cloneStaticIsoResponse(rawLidarResponse);
+    var previousSubTab = activeLidarSubTab;
+    var optimisticIndex = payload.includeAccuracy ? rawLidarResponse.accuracy.rows.length : 0;
+    var optimisticData = { action:'updateLidarRow' };
+    if (payload.includeAccuracy) optimisticData.accuracyPayload = payload;
+    if (payload.includeTilt) optimisticData.tiltPayload = payload;
+    applyOptimisticLidarSave(optimisticData, optimisticIndex);
+    // Keep the user's current view. Combined records may contain accuracy
+    // values while the user is working in the Tilt & Angle table.
+    activeLidarSubTab = previousSubTab;
+    closeLidarSmartImportModal();
+    renderSubPills();
+    renderSplitLidarTable(rawLidarResponse);
+
+    var rollback = function(error) {
+      rawLidarResponse = previousResponse;
+      activeLidarSubTab = previousSubTab;
+      renderSubPills();
+      renderSplitLidarTable(rawLidarResponse);
+      lidarSmartParsedData = payload;
+      var modal = ensureLidarSmartImportModal();
+      var source = document.getElementById('lidarSmartSource');
+      if (source) source.value = '';
+      renderLidarSmartPreview();
+      modal.style.display = 'flex';
+      alert('Smart Import Error: ' + (error && error.message ? error.message : error));
+    };
     google.script.run.withSuccessHandler(function(response) {
-      button.disabled = false; button.innerText = 'Save Record';
-      if (!response || !response.success) { alert('Smart Import Error: ' + (response && response.error ? response.error : 'Unknown error')); return; }
+      if (!response || !response.success) { rollback(response && response.error ? response.error : 'Unknown error'); return; }
       recentLidarImportRobotId = payload.robotId;
       recentLidarImportDate = payload.date;
       recentLidarImportStartIndex = response.imported && response.imported.firstRow ? Number(response.imported.firstRow) - 3 : null;
-      rawLidarResponse = response.data;
-      activeLidarSubTab = payload.lidarType;
       saveTabCache('lidar', { type:'lidar', data:response.data });
-      renderSubPills();
-      renderSplitLidarTable(response.data);
-      closeLidarSmartImportModal();
+      if (currentTab === 'lidar') {
+        rawLidarResponse = response.data;
+        activeLidarSubTab = previousSubTab;
+        renderSubPills();
+        renderSplitLidarTable(response.data);
+      }
       highlightImportedLidarRow(payload.robotId, payload.date, recentLidarImportStartIndex);
       var toast = document.getElementById('copyToast');
       toast.innerHTML = '<span style="color:#34d399;font-weight:800;">✓</span><span>LiDAR record imported</span>';
       toast.style.display = 'flex'; setTimeout(function() { toast.style.display = 'none'; }, 2200);
     }).withFailureHandler(function(error) {
-      button.disabled = false; button.innerText = 'Save Record';
-      alert('Smart Import Error: ' + (error && error.message ? error.message : error));
+      rollback(error);
     }).smartImportLidarRecord(payload);
   }
 

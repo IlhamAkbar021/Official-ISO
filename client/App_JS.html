@@ -15,6 +15,7 @@
   var searchQuery = '';
   var currentLang = localStorage.getItem('app_lang') || 'en';
   var registeredTesterNames = [];
+  var registeredSwVersionNames = [];
   var inlineRecordActive = false;
   var inlineRecordModuleKey = '';
   var pendingInlineModuleResponse = null;
@@ -547,9 +548,7 @@
         container.style.display = 'block';
         container.style.visibility = 'visible';
         container.style.opacity = '1';
-        container.innerHTML = '<div class="panel-card smart-table-card general-info-clean-card"><div class="general-info-clean-header"><span class="eyebrow">ISO REFERENCE</span><h1>General Info &amp; Standards</h1></div><div class="gi-grid"><article class="gi-card"><div class="gi-img-wrap"><span class="gi-unavailable">Mind Map of ISO Test</span></div><div class="gi-info"><strong>Mind Map of ISO Test</strong><small>Test dependencies and structure</small></div></article><article class="gi-card"><div class="gi-img-wrap"><span class="gi-unavailable">EVT2 Testing Process / Structure</span></div><div class="gi-info"><strong>EVT2 Testing Process / Structure</strong><small>Workflow and factory validation</small></div></article><article class="gi-card"><div class="gi-img-wrap"><span class="gi-unavailable">Test Station Layout</span></div><div class="gi-info"><strong>Test Station Layout</strong><small>Physical room arrangement</small></div></article><article class="gi-card"><div class="gi-img-wrap"><span class="gi-unavailable">Robot LU Definition &amp; Pose</span></div><div class="gi-info"><strong>Robot LU Definition &amp; Pose</strong><small>LU = ⌈w/500⌉ × 500 mm</small></div></article></div></div>';
       }
-      try { if (typeof renderGeneralInfoShell === 'function') renderGeneralInfoShell(container); } catch (shellError) {}
       try { if (typeof loadGeneralInfoFast === 'function') loadGeneralInfoFast(requestId); } catch (loadError) {}
       setSyncState('Specification ready', 'ready');
       return;
@@ -1483,18 +1482,29 @@
   function deleteGenericRow(event, sheetRow, moduleKey) {
     if (event) event.stopPropagation();
     openDeleteConfirm(moduleKey, sheetRow, function() {
-      var toast = document.getElementById('copyToast');
-      toast.innerHTML = '<div class="spinner" style="width:16px;height:16px;border-top-color:#ffffff;"></div><span>Deleting record…</span>';
-      toast.style.display = 'flex';
+      var previousResponse = cloneStaticIsoResponse(rawModuleResponse);
+      var dataIndex = Number(sheetRow) - Number(rawModuleResponse.headerRow || 1) - 1;
+      if (dataIndex < 0 || dataIndex >= rawModuleResponse.rows.length) {
+        handleFail('Delete failed: record index is invalid.');
+        return;
+      }
+      rawModuleResponse.rows.splice(dataIndex, 1);
+      renderSmartModule(rawModuleResponse);
+
+      var rollback = function(error) {
+        if (currentTab === moduleKey) {
+          rawModuleResponse = previousResponse;
+          renderSmartModule(rawModuleResponse);
+        }
+        handleFail(error);
+      };
       google.script.run.withSuccessHandler(function(response) {
-        toast.style.display = 'none';
         if (response && response.success) {
           localStorage.removeItem('iso_tab_cache_' + moduleKey);
-          loadCurrentTab();
         } else {
-          handleFail(response && response.error ? response.error : 'Delete failed.');
+          rollback(response && response.error ? response.error : 'Delete failed.');
         }
-      }).withFailureHandler(handleFail).deleteIsoModuleRecord({ moduleKey: moduleKey, sheetRow: sheetRow });
+      }).withFailureHandler(rollback).deleteIsoModuleRecord({ moduleKey: moduleKey, sheetRow: sheetRow });
     });
   }
 
@@ -1523,6 +1533,7 @@
   }
 
   function renderTable(response) {
+    closeActionMenus();
     rawWifiResponse = response;
     var container = document.getElementById('tableContainer');
     if (!response || response.error) {
@@ -1552,6 +1563,7 @@
   }
 
   function renderSplitLidarTable(response) {
+    closeActionMenus();
     rawLidarResponse = response;
     var pageScroller = document.querySelector('.content-scroll-area');
     if (pageScroller) pageScroller.classList.add('lidar-table-only-scroll');
@@ -1793,16 +1805,34 @@
     return html;
   }
 
+  var activeLidarInlineEdit = null;
+
+  function cancelLidarInlineEdit() {
+    if (!activeLidarInlineEdit) return;
+    var row = activeLidarInlineEdit.row;
+    if (row && row.isConnected) {
+      row.innerHTML = activeLidarInlineEdit.html;
+      row.classList.remove('lidar-inline-edit-row');
+    }
+    activeLidarInlineEdit = null;
+  }
+
   function startLidarInlineEdit(type, index) {
     var tableRow = document.querySelector('.lidar-inspection-table tr[data-source-index="' + index + '"]');
     if (!tableRow) tableRow = document.querySelector('.lidar-inspection-table tr[data-robot-id]');
     if (!tableRow) return;
-    document.querySelectorAll('.lidar-inline-edit-row').forEach(function(row) { row.classList.remove('lidar-inline-edit-row'); });
+    cancelLidarInlineEdit();
+    var staticRowSnapshot = tableRow.cloneNode(true);
+    staticRowSnapshot.querySelectorAll('.dropdown-menu').forEach(function(menu) {
+      menu.classList.remove('show', 'dropup');
+      menu.removeAttribute('style');
+    });
+    activeLidarInlineEdit = { row: tableRow, html: staticRowSnapshot.innerHTML };
     tableRow.classList.add('lidar-inline-edit-row');
     var data = type === 'lidar_acc' ? (rawLidarResponse.accuracy.rows[index] || []) : (rawLidarResponse.tilt.rows[index] || []);
-    var input = function(id, value, kind) {
+    var input = function(id, value, kind, readOnly) {
       var inputValue = kind === 'date' ? String(value || '').replace(/\//g, '-') : String(value || '');
-      return '<input class="lidar-inline-input" id="' + id + '" type="' + (kind || 'text') + '" value="' + escapeHtml(inputValue) + '">';
+      return '<input class="lidar-inline-input" id="' + id + '" type="' + (kind || 'text') + '" value="' + escapeHtml(inputValue) + '"' + (readOnly ? ' readonly aria-readonly="true"' : '') + '>';
     };
     if (type === 'lidar_acc') {
       var r2 = rawLidarResponse.accuracy.rows[index + 1] || [], r3 = rawLidarResponse.accuracy.rows[index + 2] || [];
@@ -1815,16 +1845,52 @@
       }
       var tv = tilt ? tilt.row : [];
       var tiltCells = activeLidarSubTab === 'tilt' ?
-        '<td>' + input('li_bricks', tv[4], 'number') + '</td><td>' + input('li_detected', tv[5], 'number') + '</td><td>' + input('li_height_from', tv[6], 'number') + '</td><td>' + input('li_height_to', tv[7], 'number') + '</td><td>' + input('li_tilt_status', tv[8]) + '</td><td>' + input('li_angle_from', tv[9], 'number') + input('li_angle_to', tv[10], 'number') + '</td><td>' + input('li_note', tv[11]) + '</td>' : '';
-      tableRow.innerHTML = '<td>' + input('li_robot', data[0]) + '</td><td>' + input('li_date', data[1], 'date') + '<br>' + input('li_sw', data[2]) + '</td><td>' + input('li_tester', data[3]) + '</td><td>' + input('li_d5', data[5], 'number') + '</td><td>' + input('li_d10', r2[5], 'number') + '</td><td>' + input('li_d15', r3[5], 'number') + '</td>' + tiltCells + '<td><button class="btn-action" onclick="saveLidarInlineEdit(\'lidar_acc\',' + index + ',' + (tilt ? tilt.index : -1) + ')">Save</button><button class="btn-ctrl" onclick="loadCurrentTab()">Cancel</button></td>';
+        '<td>' + input('li_bricks', tv[4], 'number') + '</td><td>' + input('li_detected', tv[5], 'number') + '</td><td>' + input('li_height_from', tv[6], 'number', true) + '</td><td>' + input('li_height_to', tv[7], 'number', true) + '</td><td>' + input('li_tilt_status', tv[8], 'text', true) + '</td><td>' + lidarAngleRangeSelect(tv[9], tv[10]) + '</td><td>' + input('li_note', tv[11]) + '</td>' : '';
+      tableRow.innerHTML = '<td>' + input('li_robot', data[0]) + '</td><td>' + input('li_date', data[1], 'date') + '<br>' + input('li_sw', data[2]) + '</td><td>' + input('li_tester', data[3]) + '</td><td>' + input('li_d5', data[5], 'number') + '</td><td>' + input('li_d10', r2[5], 'number') + '</td><td>' + input('li_d15', r3[5], 'number') + '</td>' + tiltCells + '<td class="inline-edit-actions-cell"><div class="inline-row-actions"><button type="button" class="btn-action" onclick="saveLidarInlineEdit(event,\'lidar_acc\',' + index + ',' + (tilt ? tilt.index : -1) + ')">Save</button><button type="button" class="btn-ctrl" onclick="cancelLidarInlineEdit()">Cancel</button></div></td>';
       if (activeLidarSubTab === 'tilt') {
         var brickInput = document.getElementById('li_bricks');
         if (brickInput) brickInput.addEventListener('input', updateLidarInlineTiltFields);
         updateLidarInlineTiltFields();
       }
     } else {
-      tableRow.innerHTML = '<td>' + input('li_robot', data[0]) + '</td><td>' + input('li_date', data[1], 'date') + '<br>' + input('li_sw', data[2]) + '</td><td>' + input('li_tester', data[3]) + '</td><td>' + input('li_bricks', data[4], 'number') + '</td><td>' + input('li_detected', data[5], 'number') + '</td><td colspan="5">' + input('li_note', data[11]) + ' <button class="btn-action" onclick="saveLidarInlineEdit(\'lidar_tilt\',' + index + ')">Save</button><button class="btn-ctrl" onclick="loadCurrentTab()">Cancel</button></td>';
+      tableRow.innerHTML = '<td>' + input('li_robot', data[0]) + '</td><td>' + input('li_date', data[1], 'date') + '<br>' + input('li_sw', data[2]) + '</td><td>' + input('li_tester', data[3]) + '</td><td>' + input('li_bricks', data[4], 'number') + '</td><td>' + input('li_detected', data[5], 'number') + '</td><td colspan="5" class="inline-edit-actions-cell"><div class="inline-row-actions">' + input('li_note', data[11]) + '<button type="button" class="btn-action" onclick="saveLidarInlineEdit(event,\'lidar_tilt\',' + index + ')">Save</button><button type="button" class="btn-ctrl" onclick="cancelLidarInlineEdit()">Cancel</button></div></td>';
     }
+  }
+
+  var LIDAR_TILT_PROFILES = Array.from({ length: 9 }, function(_, bricks) {
+    return {
+      bricks: bricks,
+      heightFrom: (bricks - 1) * 10,
+      heightTo: bricks * 10,
+      angleFrom: ((bricks - 4) * 0.38).toFixed(2),
+      angleTo: ((bricks - 3) * 0.38).toFixed(2),
+      status: bricks < 4 ? 'Tilt Down, Acceptable' : (bricks === 4 ? 'Normal' : (bricks === 5 ? 'Tilt Up, but Acceptable' : 'Tilt Up, Not Acceptable'))
+    };
+  });
+
+  function lidarAngleRangeSelect(angleFrom, angleTo) {
+    var selectedValue = String(angleFrom || '') + '|' + String(angleTo || '');
+    var options = LIDAR_TILT_PROFILES.map(function(profile) {
+      var value = profile.angleFrom + '|' + profile.angleTo;
+      return '<option value="' + value + '"' + (value === selectedValue ? ' selected' : '') + '>' + profile.angleFrom + ' to ' + profile.angleTo + '</option>';
+    }).join('');
+    return '<select class="lidar-inline-input lidar-angle-range" id="li_angle_range" aria-label="Angle range" onchange="applyLidarAngleRange(this.value)">' + options + '</select>';
+  }
+
+  function getLidarTiltProfileByRange(value) {
+    return LIDAR_TILT_PROFILES.filter(function(profile) {
+      return profile.angleFrom + '|' + profile.angleTo === value;
+    })[0] || null;
+  }
+
+  function applyLidarAngleRange(value) {
+    var profile = getLidarTiltProfileByRange(value);
+    if (!profile) return;
+    var set = function(id, nextValue) { var el = document.getElementById(id); if (el) el.value = nextValue; };
+    set('li_bricks', profile.bricks);
+    set('li_height_from', profile.heightFrom);
+    set('li_height_to', profile.heightTo);
+    set('li_tilt_status', profile.status);
   }
 
   function updateLidarInlineTiltFields() {
@@ -1839,11 +1905,10 @@
     set('li_height_from', heightFrom);
     set('li_height_to', heightTo);
     set('li_tilt_status', status);
-    set('li_angle_from', angleFrom);
-    set('li_angle_to', angleTo);
+    set('li_angle_range', angleFrom + '|' + angleTo);
   }
 
-  function saveLidarInlineEdit(type, index, tiltIndex) {
+  function saveLidarInlineEdit(event, type, index, tiltIndex) {
     var value = function(id) { var el = document.getElementById(id); return el ? el.value : ''; };
     var payload = { rowIndex:index, lidarType:type === 'lidar_tilt' ? 'tilt' : 'accuracy', robotId:value('li_robot'), date:value('li_date'), swVer:value('li_sw'), tester:value('li_tester') };
     if (payload.lidarType === 'accuracy') {
@@ -1853,20 +1918,121 @@
     } else {
       payload.bricks=value('li_bricks'); payload.detectedDist=value('li_detected'); payload.note=value('li_note');
     }
-    var saveTilt = function() {
-      if (payload.lidarType !== 'accuracy') return loadCurrentTab(true);
-      var tiltPayload = { rowIndex:(tiltIndex !== undefined && tiltIndex >= 0 ? tiltIndex : index), lidarType:'tilt', robotId:payload.robotId, date:payload.date, swVer:payload.swVer, tester:payload.tester,
-        bricks:value('li_bricks'), detectedDist:value('li_detected'), heightFrom:value('li_height_from'), heightTo:value('li_height_to'), tiltStatus:value('li_tilt_status'), angleFrom:value('li_angle_from'), angleTo:value('li_angle_to'), note:value('li_note') };
-      google.script.run.withSuccessHandler(function(){ loadCurrentTab(true); }).withFailureHandler(function(error){ alert('Tilt update failed: ' + (error && error.message ? error.message : error)); }).updateLidarRecord(tiltPayload);
+    var request = { action: 'updateLidarRow' };
+    if (payload.lidarType === 'accuracy') request.accuracyPayload = payload;
+    else request.tiltPayload = payload;
+
+    if (payload.lidarType === 'accuracy' && document.getElementById('li_angle_range')) {
+      var profile = getLidarTiltProfileByRange(value('li_angle_range'));
+      if (!profile) return alert('Select a valid angle range.');
+      request.tiltPayload = { rowIndex:(tiltIndex !== undefined && tiltIndex >= 0 ? tiltIndex : index), lidarType:'tilt', robotId:payload.robotId, date:payload.date, swVer:payload.swVer, tester:payload.tester,
+        bricks:value('li_bricks'), detectedDist:value('li_detected'), heightFrom:value('li_height_from'), heightTo:value('li_height_to'), tiltStatus:value('li_tilt_status'), angleFrom:profile.angleFrom, angleTo:profile.angleTo, note:value('li_note') };
+    }
+
+    var button = event && event.currentTarget;
+    if (button) { button.disabled = true; button.innerText = 'Saving…'; }
+
+    // Optimistic UI: update the local model and immediately replace the
+    // editor with the normal static row while Apps Script saves in background.
+    var previousResponse = JSON.parse(JSON.stringify(rawLidarResponse));
+    applyOptimisticLidarSave(request, index);
+    activeLidarInlineEdit = null;
+    renderSplitLidarTable(rawLidarResponse);
+
+    var rollback = function(error) {
+      rawLidarResponse = previousResponse;
+      renderSplitLidarTable(rawLidarResponse);
+      startLidarInlineEdit(type, index);
+      restoreLidarDraft(request);
+      alert('Update failed: ' + (error && error.message ? error.message : error));
     };
-    google.script.run.withSuccessHandler(saveTilt).withFailureHandler(function(error){ alert('Update failed: ' + (error && error.message ? error.message : error)); }).updateLidarRecord(payload);
+
+    google.script.run
+      .withSuccessHandler(function(result) {
+        if (!result || !result.success) { rollback((result && result.error) || 'Unknown error'); return; }
+        if (result.data && result.data.accuracy && result.data.tilt) {
+          rawLidarResponse = result.data;
+          renderSplitLidarTable(rawLidarResponse);
+        }
+      })
+      .withFailureHandler(rollback)
+      .saveLidarData(request);
+  }
+
+  function applyOptimisticLidarSave(rowData, accuracyIndex) {
+    if (rowData.accuracyPayload) {
+      var accuracy = rowData.accuracyPayload;
+      var accuracyRows = rawLidarResponse.accuracy.rows;
+      var runs = [accuracy.runA || {}, accuracy.runB || {}, accuracy.runC || {}];
+      for (var runIndex = 0; runIndex < 3; runIndex++) {
+        var rowIndex = accuracyIndex + runIndex;
+        var row = accuracyRows[rowIndex] || [];
+        while (row.length < 11) row.push('');
+        if (runIndex === 0) {
+          row[0] = accuracy.robotId;
+          row[1] = accuracy.date;
+          row[2] = accuracy.swVer;
+          row[3] = accuracy.tester;
+        }
+        row[4] = ['A - 5', 'B - 10', 'C - 15'][runIndex];
+        row[5] = runs[runIndex].distance || '';
+        accuracyRows[rowIndex] = row;
+      }
+    }
+
+    if (rowData.tiltPayload) {
+      var tilt = rowData.tiltPayload;
+      var tiltRows = rawLidarResponse.tilt.rows;
+      var wantedRobot = String(tilt.robotId || '').trim().toUpperCase();
+      var wantedDate = String(tilt.date || '').trim().replace(/\//g, '-');
+      var tiltIndex = -1;
+      for (var i = 0; i < tiltRows.length; i++) {
+        if (String(tiltRows[i][0] || '').trim().toUpperCase() === wantedRobot &&
+            String(tiltRows[i][1] || '').trim().replace(/\//g, '-') === wantedDate) {
+          tiltIndex = i;
+          break;
+        }
+      }
+      var nextTiltRow = [tilt.robotId, tilt.date, tilt.swVer, tilt.tester, tilt.bricks, tilt.detectedDist,
+        tilt.heightFrom, tilt.heightTo, tilt.tiltStatus, tilt.angleFrom, tilt.angleTo, tilt.note];
+      if (tiltIndex >= 0) tiltRows[tiltIndex] = nextTiltRow;
+      else tiltRows.push(nextTiltRow);
+    }
+  }
+
+  function restoreLidarDraft(rowData) {
+    var set = function(id, nextValue) {
+      var element = document.getElementById(id);
+      if (element) element.value = nextValue === undefined || nextValue === null ? '' : nextValue;
+    };
+    var accuracy = rowData.accuracyPayload;
+    var tilt = rowData.tiltPayload;
+    var shared = accuracy || tilt || {};
+    set('li_robot', shared.robotId);
+    set('li_date', shared.date);
+    set('li_sw', shared.swVer);
+    set('li_tester', shared.tester);
+    if (accuracy) {
+      set('li_d5', (accuracy.runA || {}).distance);
+      set('li_d10', (accuracy.runB || {}).distance);
+      set('li_d15', (accuracy.runC || {}).distance);
+    }
+    if (tilt) {
+      set('li_bricks', tilt.bricks);
+      set('li_detected', tilt.detectedDist);
+      set('li_height_from', tilt.heightFrom);
+      set('li_height_to', tilt.heightTo);
+      set('li_tilt_status', tilt.tiltStatus);
+      set('li_angle_range', String(tilt.angleFrom) + '|' + String(tilt.angleTo));
+      set('li_note', tilt.note);
+    }
   }
 
   function renderActionDropdown(type, index, robotId, recordDate) {
     var menuId = type + '_' + index;
     var editAction = type === 'wifi' ? 'openEditModal(' + index + ')' : 'startLidarInlineEdit(\'' + type + '\',' + index + ')';
     return '<div class="action-menu-wrapper">' +
-      '<button class="icon-btn-dots" onclick="toggleActionMenu(event, \'' + menuId + '\')">&#8942;</button>' +
+      '<button type="button" class="icon-btn-dots action-btn" data-menu-id="menu_' + menuId + '" aria-label="Row actions" aria-haspopup="menu" aria-expanded="false">&#8942;</button>' +
       '<div class="dropdown-menu" id="menu_' + menuId + '">' +
         '<div class="dropdown-item" onclick="' + editAction + '">Edit</div>' +
         '<div class="dropdown-item" onclick="copyRowData(\'' + type + '\', ' + index + ')">Copy</div>' +
@@ -1878,7 +2044,7 @@
   function renderGenericActionDropdown(moduleKey, sheetRow) {
     var menuId = 'generic_' + String(moduleKey).replace(/[^a-z0-9_]/gi, '_') + '_' + sheetRow;
     return '<div class="action-menu-wrapper generic-action-menu">' +
-      '<button type="button" class="icon-btn-dots" aria-label="Row actions" onclick="toggleActionMenu(event, \'' + menuId + '\')">&#8942;</button>' +
+      '<button type="button" class="icon-btn-dots action-btn" data-menu-id="menu_' + menuId + '" aria-label="Row actions" aria-haspopup="menu" aria-expanded="false">&#8942;</button>' +
       '<div class="dropdown-menu" id="menu_' + menuId + '">' +
       '<div class="dropdown-item" onclick="editBaseDepthRow(event,' + sheetRow + ')">Edit</div>' +
       '<div class="dropdown-divider"></div>' +
@@ -1886,46 +2052,158 @@
       '</div></div>';
   }
 
-  function toggleActionMenu(event, menuId) {
-    event.stopPropagation();
-    var allMenus = document.querySelectorAll('.dropdown-menu');
-    allMenus.forEach(function(m) { if (m.id !== 'menu_' + menuId) m.classList.remove('show'); });
-    var menu = document.getElementById('menu_' + menuId);
-    if (menu) {
-      var willOpen = !menu.classList.contains('show');
-      menu.classList.toggle('show', willOpen);
-      if (willOpen) {
-        var trigger = event.currentTarget || event.target;
-        var rect = trigger.getBoundingClientRect();
-        menu.style.position = 'fixed';
-        menu.style.right = 'auto';
-        menu.style.left = Math.max(6, rect.right - 145) + 'px';
-        menu.style.top = (rect.bottom + 5) + 'px';
-        menu.style.zIndex = '100000';
-      } else {
-        menu.removeAttribute('style');
-      }
+  function closeActionMenu(menu) {
+    if (!menu) return;
+    menu.classList.remove('show', 'dropup', 'is-positioned');
+    menu.removeAttribute('style');
+    if (menu._actionMenuTrigger) menu._actionMenuTrigger.setAttribute('aria-expanded', 'false');
+    if (menu._actionMenuHome && menu._actionMenuHome.isConnected) {
+      var next = menu._actionMenuNext;
+      menu._actionMenuHome.insertBefore(menu, next && next.parentNode === menu._actionMenuHome ? next : null);
+    } else if (menu.parentNode === document.body) {
+      menu.remove();
     }
+    menu._actionMenuHome = null;
+    menu._actionMenuNext = null;
+    menu._actionMenuTrigger = null;
   }
 
-  document.addEventListener('click', function() {
-    document.querySelectorAll('.dropdown-menu').forEach(function(m) { m.classList.remove('show'); });
-  });
-
-  function deleteFromDropdown(type, index, robotId, recordDate) {
-    document.querySelectorAll('.dropdown-menu').forEach(function(m) { m.classList.remove('show'); });
-    var moduleKey = type === 'wifi' ? 'Wi-Fi' : (type === 'lidar_acc' ? 'LiDAR Accuracy' : 'LiDAR Tilt');
-    openDeleteConfirm(moduleKey, index, function() {
-      var toast = document.getElementById('copyToast');
-      toast.innerHTML = '<div class="spinner" style="width:16px;height:16px;border-top-color:#ffffff;"></div> <span style="margin-left:4px;">Deleting...</span>';
-      toast.style.display = 'flex';
-      if (type === 'wifi') google.script.run.withSuccessHandler(function(){ toast.style.display='none'; loadCurrentTab(); }).deleteWifiRecord({ rowIndex: index });
-      else google.script.run.withSuccessHandler(function(){ toast.style.display='none'; loadCurrentTab(true); }).withFailureHandler(function(error){ toast.style.display='none'; alert('Delete failed: ' + (error && error.message ? error.message : error)); }).deleteLidarRecord({ rowIndex: index, robotId: robotId, date: recordDate, lidarType: (type === 'lidar_acc' ? 'accuracy' : 'tilt') });
+  function closeActionMenus(exceptMenu) {
+    Array.prototype.forEach.call(document.querySelectorAll('.dropdown-menu.show'), function(menu) {
+      if (menu !== exceptMenu) closeActionMenu(menu);
     });
   }
 
+  function positionActionMenu(button, menu) {
+    closeActionMenus(menu);
+    if (menu.classList.contains('show')) {
+      closeActionMenu(menu);
+      return;
+    }
+
+    menu._actionMenuHome = menu.parentNode;
+    menu._actionMenuNext = menu.nextSibling;
+    menu._actionMenuTrigger = button;
+    document.body.appendChild(menu);
+    menu.classList.add('show', 'is-positioned');
+    menu.style.visibility = 'hidden';
+
+    var rect = button.getBoundingClientRect();
+    var menuHeight = Math.max(menu.offsetHeight || 0, 120);
+    var menuWidth = Math.max(menu.offsetWidth || 0, 145);
+    var spaceBelow = window.innerHeight - rect.bottom;
+    var openUpwards = spaceBelow < Math.max(menuHeight + 12, 160);
+    var top = openUpwards ? rect.top - menuHeight - 6 : rect.bottom + 6;
+    var left = rect.right - menuWidth;
+
+    menu.classList.toggle('dropup', openUpwards);
+    menu.style.top = Math.max(6, Math.min(top, window.innerHeight - menuHeight - 6)) + 'px';
+    menu.style.left = Math.max(6, Math.min(left, window.innerWidth - menuWidth - 6)) + 'px';
+    menu.style.visibility = 'visible';
+    button.setAttribute('aria-expanded', 'true');
+  }
+
+  function bindActionMenuDelegation() {
+    var tableContainer = document.getElementById('tableContainer');
+    if (!tableContainer || tableContainer.dataset.actionMenuDelegated === 'true') return;
+    tableContainer.dataset.actionMenuDelegated = 'true';
+    tableContainer.addEventListener('click', function(event) {
+      var button = event.target && event.target.closest ? event.target.closest('.action-btn') : null;
+      if (!button || !tableContainer.contains(button)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      var menu = document.getElementById(button.dataset.menuId || '');
+      if (menu) positionActionMenu(button, menu);
+    });
+  }
+
+  // Compatibility for older cached markup that still uses inline onclick.
+  function toggleActionMenu(event, menuId) {
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    var button = event && (event.currentTarget || (event.target && event.target.closest('.action-btn, .icon-btn-dots')));
+    var menu = document.getElementById('menu_' + menuId);
+    if (button && menu) positionActionMenu(button, menu);
+  }
+
+  document.addEventListener('click', function(event) {
+    var clickedMenu = event.target && event.target.closest ? event.target.closest('.dropdown-menu') : null;
+    if (clickedMenu) {
+      if (event.target.closest('.dropdown-item')) closeActionMenu(clickedMenu);
+      return;
+    }
+    closeActionMenus();
+  });
+
+  window.addEventListener('resize', function() { closeActionMenus(); }, { passive:true });
+  document.addEventListener('scroll', function(event) {
+    if (event.target && event.target.closest && event.target.closest('.table-scroller, .content-scroll-area')) closeActionMenus();
+  }, true);
+
+  function deleteFromDropdown(type, index, robotId, recordDate) {
+    closeActionMenus();
+    var moduleKey = type === 'wifi' ? 'Wi-Fi' : (type === 'lidar_acc' ? 'LiDAR Accuracy' : 'LiDAR Tilt');
+    openDeleteConfirm(moduleKey, index, function() {
+      optimisticDeleteStructuredRecord(type, index, robotId, recordDate);
+    });
+  }
+
+  function optimisticDeleteStructuredRecord(type, index, robotId, recordDate) {
+    var isWifi = type === 'wifi';
+    var previousResponse = cloneStaticIsoResponse(isWifi ? rawWifiResponse : rawLidarResponse);
+    var request;
+
+    if (isWifi) {
+      if (!rawWifiResponse.rows[index]) return handleFail('Delete failed: Wi-Fi record was not found.');
+      rawWifiResponse.rows.splice(index, 1);
+      renderTable(rawWifiResponse);
+      request = { rowIndex:index };
+    } else {
+      var isAccuracy = type === 'lidar_acc';
+      var sourceRows = isAccuracy ? rawLidarResponse.accuracy.rows : rawLidarResponse.tilt.rows;
+      var sourceRow = sourceRows[index] || [];
+      robotId = robotId || sourceRow[0] || '';
+      recordDate = recordDate || sourceRow[1] || '';
+      if (!sourceRow.length) return handleFail('Delete failed: LiDAR record was not found.');
+      if (isAccuracy) {
+        rawLidarResponse.accuracy.rows.splice(index, 3);
+        rawLidarResponse.tilt.rows = rawLidarResponse.tilt.rows.filter(function(row) {
+          return !(String(row[0] || '').trim().toUpperCase() === String(robotId).trim().toUpperCase() &&
+            String(row[1] || '').trim().replace(/\//g, '-') === String(recordDate).trim().replace(/\//g, '-'));
+        });
+      } else {
+        rawLidarResponse.tilt.rows.splice(index, 1);
+      }
+      renderSplitLidarTable(rawLidarResponse);
+      request = { rowIndex:index, robotId:robotId, date:recordDate, lidarType:isAccuracy ? 'accuracy' : 'tilt' };
+    }
+
+    var rollback = function(error) {
+      if (isWifi && currentTab === 'wifi') {
+        rawWifiResponse = previousResponse;
+        renderTable(rawWifiResponse);
+      } else if (!isWifi && currentTab === 'lidar') {
+        rawLidarResponse = previousResponse;
+        renderSplitLidarTable(rawLidarResponse);
+      }
+      handleFail(error);
+    };
+    var saved = function(response) {
+      if (!response || !response.success) {
+        rollback(response && response.error ? response.error : 'Delete failed.');
+        return;
+      }
+      localStorage.removeItem('iso_tab_cache_' + (isWifi ? 'wifi' : 'lidar'));
+    };
+
+    if (isWifi) google.script.run.withSuccessHandler(saved).withFailureHandler(rollback).deleteWifiRecord(request);
+    else google.script.run.withSuccessHandler(saved).withFailureHandler(rollback).deleteLidarRecord(request);
+  }
+
   function copyRowData(type, index) {
-    document.querySelectorAll('.dropdown-menu').forEach(function(m) { m.classList.remove('show'); });
+    closeActionMenus();
     var textToCopy = '';
     if (type === 'wifi') {
       var row = rawWifiResponse.rows[index] || [];
@@ -2026,8 +2304,16 @@
 
   function openInlineGenericRecord() {
     if (inlineRecordActive) return;
+    loadRegisteredRobotNames();
     var body = document.getElementById('genericModuleTableBody');
-    if (!body) return;
+    if (!body) {
+      isEditing = false;
+      activeEditRowIndex = null;
+      activeModuleOriginalRow = null;
+      renderGenericModuleModal();
+      document.getElementById('inputModal').style.display = 'flex';
+      return;
+    }
     inlineRecordActive = true;
     inlineRecordModuleKey = rawModuleResponse.key || currentTab;
     pendingInlineModuleResponse = null;
@@ -2046,10 +2332,12 @@
         html += '<td><select class="inline-record-field" data-column="' + index + '"' + customHandler + '><option value="">Select…</option>' + options.map(function(option) { return '<option value="' + escapeHtml(option) + '">' + escapeHtml(option) + '</option>'; }).join('') + customRobotOption + '</select>' + (index === robotColumn ? '<input class="custom-robot-input" type="text" placeholder="Type Robot ID" data-custom-robot-for="' + index + '">' : '') + '</td>';
       } else {
         var inlineDate = /date/i.test(String(header || ''));
-        html += '<td><input class="inline-record-field" data-column="' + index + '" type="' + (inlineDate ? 'date' : 'text') + '" placeholder="' + escapeHtml(getFriendlyModuleHeader(header, index, rawModuleResponse.key)) + (inlineDate ? '><button type="button" class="iso-date-picker-button inline-date-picker" onclick="openIsoDatePicker(this.previousElementSibling)">📅</button>' : '></td>') + (inlineDate ? '</td>' : '');
+        var inlineSw = /\bsw\b|software|version/i.test(String(header || ''));
+        var sharedList = index === robotColumn ? ' list="registeredRobotList" onfocus="hydrateRegisteredRobotList()"' : (inlineSw ? ' list="registeredSwVersionList" onfocus="hydrateRegisteredSwVersionList()"' : '');
+        html += '<td><input class="inline-record-field" data-column="' + index + '" type="' + (inlineDate ? 'date' : 'text') + '"' + sharedList + ' placeholder="' + escapeHtml(getFriendlyModuleHeader(header, index, rawModuleResponse.key)) + (inlineDate ? '><button type="button" class="iso-date-picker-button inline-date-picker" onclick="openIsoDatePicker(this.previousElementSibling)">📅</button>' : '></td>') + (inlineDate ? '</td>' : '');
       }
     });
-    html += '<td class="module-action-cell"><button type="button" class="inline-save-button" onclick="saveInlineGenericRecord()">Save</button><button type="button" class="inline-cancel-button" onclick="cancelInlineGenericRecord()">Cancel</button></td></tr>';
+    html += '<td class="module-action-cell inline-edit-actions-cell"><div class="inline-row-actions"><button type="button" class="inline-save-button" onclick="saveInlineGenericRecord()">Save</button><button type="button" class="inline-cancel-button" onclick="cancelInlineGenericRecord()">Cancel</button></div></td></tr>';
     body.insertAdjacentHTML('afterbegin', html);
     body.parentElement.parentElement.scrollTop = 0;
     var first = body.querySelector('.inline-record-field');
@@ -2116,6 +2404,23 @@
     pendingInlineModuleResponse = null;
   }
 
+  function cloneStaticIsoResponse(response) {
+    return response ? JSON.parse(JSON.stringify(response)) : response;
+  }
+
+  function restoreInlineGenericDraft(values) {
+    openInlineGenericRecord();
+    document.querySelectorAll('.inline-add-row .inline-record-field').forEach(function(field) {
+      var column = Number(field.dataset.column);
+      if (field.classList.contains('head-depth-image-choice') && /^data:image\//i.test(values[column] || '')) {
+        field.value = 'import';
+        field.dataset.imageData = values[column];
+      } else {
+        field.value = values[column] === undefined ? '' : values[column];
+      }
+    });
+  }
+
   function saveInlineGenericRecord() {
     var fields = document.querySelectorAll('.inline-add-row .inline-record-field');
     var values = [];
@@ -2134,31 +2439,45 @@
     if (!values[robotColumn]) { alert('Please select or enter a Robot ID.'); return; }
     var button = document.querySelector('.inline-save-button');
     if (button) { button.disabled = true; button.innerText = 'Saving…'; }
+    var previousResponse = cloneStaticIsoResponse(rawModuleResponse);
+    var moduleKey = rawModuleResponse.key;
+    var sheetName = rawModuleResponse.sheetName;
+
+    // Optimistic add for Static ISO generic tables (including IR Cliff).
+    rawModuleResponse.rows = rawModuleResponse.rows || [];
+    rawModuleResponse.rows.push(values.slice());
+    discardInlineGenericRecord();
+    renderSmartModule(rawModuleResponse);
+
+    var rollback = function(error) {
+      rawModuleResponse = previousResponse;
+      renderSmartModule(rawModuleResponse);
+      restoreInlineGenericDraft(values);
+      handleFail(error);
+    };
     google.script.run.withSuccessHandler(function(response) {
       if (!response || !response.success) {
-        if (button) { button.disabled = false; button.innerText = 'Save'; }
-        handleFail(response && response.error ? response.error : 'Save failed.');
+        rollback(response && response.error ? response.error : 'Save failed.');
         return;
       }
-      discardInlineGenericRecord();
-      localStorage.removeItem('iso_tab_cache_' + rawModuleResponse.key);
-      loadCurrentTab();
+      localStorage.removeItem('iso_tab_cache_' + moduleKey);
     }).withFailureHandler(function(error) {
-      if (button) { button.disabled = false; button.innerText = 'Save'; }
-      handleFail(error);
+      rollback(error);
     }).appendIsoModuleRecord({
-      moduleKey: rawModuleResponse.key,
-      sheetName: rawModuleResponse.sheetName,
+      moduleKey: moduleKey,
+      sheetName: sheetName,
       values: values
     });
   }
 
   function renderGenericModuleModal(row, sheetRow) {
+    loadRegisteredRobotNames();
     var headers = rawModuleResponse.headers || [];
     var editing = Array.isArray(row);
     document.getElementById('modalTitle').innerText = (editing ? 'Edit ' : 'Add ') + (rawModuleResponse.title || 'ISO record');
     var robotColumn = rawModuleResponse.roles && rawModuleResponse.roles.robot >= 0 ? rawModuleResponse.roles.robot : 0;
     var testerColumn = rawModuleResponse.roles && rawModuleResponse.roles.tester >= 0 ? rawModuleResponse.roles.tester : -1;
+    var swColumn = headers.findIndex(function(header) { return /\bsw\b|software|version/i.test(String(header || '')); });
     var robotId = editing ? String(row[robotColumn] || 'Record') : '';
     document.getElementById('formBody').innerHTML = (editing ? '<div class="modal-record-context"><span>Robot record</span><strong>' + escapeHtml(robotId) + '</strong><small>Only changed fields will be written to Google Sheets.</small></div>' : '') + '<div class="module-edit-grid">' + headers.map(function(header, index) {
       var label = getFriendlyModuleHeader(header, index, rawModuleResponse.key);
@@ -2168,10 +2487,11 @@
         return '<div class="form-group module-image-field"><label>' + escapeHtml(label) + '</label>' + renderImageCell(value, header, sheetRow, index + 1, rawModuleResponse.sheetName) + '<small>Image evidence is managed from Google Sheets.</small></div>';
       }
       var robotList = index === robotColumn ? ' list="registeredRobotList" onfocus="hydrateRegisteredRobotList()"' : '';
+      var swList = index === swColumn ? ' list="registeredSwVersionList" onfocus="hydrateRegisteredSwVersionList()"' : '';
       var testerList = index === testerColumn ? ' list="registeredTesterList" onfocus="hydrateRegisteredTesterList()"' : '';
       var dateField = /date/i.test(String(header || ''));
       var dateValue = dateField ? value.replace(/\//g, '-') : value;
-      return '<div class="form-group"><label>' + escapeHtml(label) + '</label><input type="' + (dateField ? 'date' : 'text') + '" name="module_field_' + index + '" value="' + escapeHtml(dateValue) + '" placeholder="Enter ' + escapeHtml(label) + '"' + required + robotList + testerList + '>' + (dateField ? '<button type="button" class="iso-date-picker-button inline-date-picker" onclick="openIsoDatePicker(this.previousElementSibling)">📅</button>' : '') + '</div>';
+      return '<div class="form-group"><label>' + escapeHtml(label) + '</label><input type="' + (dateField ? 'date' : 'text') + '" name="module_field_' + index + '" value="' + escapeHtml(dateValue) + '" placeholder="Enter ' + escapeHtml(label) + '"' + required + robotList + swList + testerList + '>' + (dateField ? '<button type="button" class="iso-date-picker-button inline-date-picker" onclick="openIsoDatePicker(this.previousElementSibling)">📅</button>' : '') + '</div>';
     }).join('') + '</div>';
   }
 
@@ -2186,14 +2506,39 @@
     if (!list.options.length) loadRegisteredRobotNames();
   }
 
+  function hydrateRegisteredSwVersionList() {
+    var list = document.getElementById('registeredSwVersionList');
+    if (!list) return;
+    if (!registeredSwVersionNames.length) {
+      try { registeredSwVersionNames = JSON.parse(localStorage.getItem('registered_sw_versions') || '[]'); } catch (e) { registeredSwVersionNames = []; }
+    }
+    list.innerHTML = registeredSwVersionNames.map(function(version) { return '<option value="' + escapeHtml(version) + '"></option>'; }).join('');
+    if (!list.options.length) loadRegisteredRobotNames();
+  }
+
   function loadRegisteredRobotNames(onComplete) {
     google.script.run.withSuccessHandler(function(response) {
-      var names = response && response.success && Array.isArray(response.names) ? response.names : [];
-      updateRegisteredRobotList(names.map(function(name) { return { name: name }; }));
-      if (onComplete) onComplete(names);
+      if (response && response.success) {
+        var names = Array.isArray(response.names) ? response.names : [];
+        registeredSwVersionNames = Array.isArray(response.swVersions) ? response.swVersions : [];
+        try { localStorage.setItem('registered_sw_versions', JSON.stringify(registeredSwVersionNames)); } catch (e) {}
+        updateRegisteredRobotList(names.map(function(name) { return { name:name }; }));
+        hydrateRegisteredSwVersionList();
+        if (onComplete) onComplete(names);
+        return;
+      }
+      loadOverviewRobotNamesFallback(onComplete);
     }).withFailureHandler(function() {
-      if (onComplete) onComplete([]);
-    }).getOverviewRobotNames();
+      loadOverviewRobotNamesFallback(onComplete);
+    }).getStaticIsoInputChoices();
+  }
+
+  function loadOverviewRobotNamesFallback(onComplete) {
+    google.script.run.withSuccessHandler(function(response) {
+      var names = response && response.success && Array.isArray(response.names) ? response.names : [];
+      updateRegisteredRobotList(names.map(function(name) { return { name:name }; }));
+      if (onComplete) onComplete(names);
+    }).withFailureHandler(function() { if (onComplete) onComplete([]); }).getOverviewRobotNames();
   }
 
   function submitGenericModuleForm() {
@@ -2201,20 +2546,58 @@
       var field = document.querySelector('[name="module_field_' + index + '"]');
       return field ? field.value : '';
     });
-    if (isEditing && activeEditRowIndex && activeModuleOriginalRow) {
-      var changes = [];
+    var wasEditing = isEditing && activeEditRowIndex && activeModuleOriginalRow;
+    var sheetRow = activeEditRowIndex;
+    var originalRow = activeModuleOriginalRow ? activeModuleOriginalRow.slice() : null;
+    var previousResponse = cloneStaticIsoResponse(rawModuleResponse);
+    var moduleKey = rawModuleResponse.key;
+    var sheetName = rawModuleResponse.sheetName;
+    var changes = [];
+    var draftRow = originalRow ? originalRow.slice() : values.slice();
+
+    if (wasEditing) {
       values.forEach(function(value, index) {
         var field = document.querySelector('[name="module_field_' + index + '"]');
         if (!field) return;
-        if (value !== String(activeModuleOriginalRow[index] || '')) changes.push({ column: index + 1, value: value });
+        draftRow[index] = value;
+        if (value !== String(originalRow[index] || '')) changes.push({ column: index + 1, value: value });
       });
       if (!changes.length) { closeInputModal(); return; }
-      google.script.run.withSuccessHandler(handleSuccess).withFailureHandler(handleFail).updateIsoModuleCells({
-        sheetName: rawModuleResponse.sheetName, moduleKey: rawModuleResponse.key, row: activeEditRowIndex, changes: changes
+      var dataIndex = sheetRow - (rawModuleResponse.headerRow || 1) - 1;
+      if (dataIndex >= 0 && rawModuleResponse.rows[dataIndex]) rawModuleResponse.rows[dataIndex] = draftRow.slice();
+    } else {
+      rawModuleResponse.rows.push(draftRow.slice());
+    }
+
+    closeInputModal();
+    renderSmartModule(rawModuleResponse);
+
+    var rollback = function(error) {
+      rawModuleResponse = previousResponse;
+      renderSmartModule(rawModuleResponse);
+      isEditing = !!wasEditing;
+      activeEditRowIndex = sheetRow;
+      activeModuleOriginalRow = originalRow;
+      renderGenericModuleModal(wasEditing ? draftRow : null, sheetRow);
+      document.getElementById('inputModal').style.display = 'flex';
+      if (!wasEditing) values.forEach(function(value, index) {
+        var field = document.querySelector('[name="module_field_' + index + '"]');
+        if (field) field.value = value;
+      });
+      handleFail(error);
+    };
+    var saved = function(response) {
+      if (!response || response.success === false) rollback(response && response.error ? response.error : 'The record could not be saved.');
+      else localStorage.removeItem('iso_tab_cache_' + moduleKey);
+    };
+
+    if (wasEditing) {
+      google.script.run.withSuccessHandler(saved).withFailureHandler(rollback).updateIsoModuleCells({
+        sheetName: sheetName, moduleKey: moduleKey, row: sheetRow, changes: changes
       });
     } else {
-      google.script.run.withSuccessHandler(handleSuccess).withFailureHandler(handleFail).appendIsoModuleRecord({
-        sheetName: rawModuleResponse.sheetName, moduleKey: rawModuleResponse.key, values: values
+      google.script.run.withSuccessHandler(saved).withFailureHandler(rollback).appendIsoModuleRecord({
+        sheetName: sheetName, moduleKey: moduleKey, values: values
       });
     }
   }
@@ -2252,12 +2635,19 @@
 
   function confirmDeleteRecord() {
     if (activeEditRowIndex === null) return;
+    var deleteIndex = activeEditRowIndex;
+    var deleteType = currentTab === 'wifi' ? 'wifi' : (activeLidarEditType === 'tilt' ? 'lidar_tilt' : 'lidar_acc');
+    var robotId = '';
+    var recordDate = '';
+    if (currentTab === 'lidar') {
+      var deleteRows = deleteType === 'lidar_acc' ? rawLidarResponse.accuracy.rows : rawLidarResponse.tilt.rows;
+      var deleteRow = deleteRows[deleteIndex] || [];
+      robotId = deleteRow[0] || '';
+      recordDate = deleteRow[1] || '';
+    }
     openDeleteConfirm(currentTab, activeEditRowIndex, function() {
-      if (currentTab === 'wifi') {
-        google.script.run.withSuccessHandler(handleSuccess).withFailureHandler(handleFail).deleteWifiRecord({ rowIndex: activeEditRowIndex });
-      } else if (currentTab === 'lidar') {
-        google.script.run.withSuccessHandler(handleSuccess).withFailureHandler(handleFail).deleteLidarRecord({ rowIndex: activeEditRowIndex, lidarType: activeLidarEditType });
-      }
+      closeInputModal();
+      optimisticDeleteStructuredRecord(deleteType, deleteIndex, robotId, recordDate);
     });
   }
 
@@ -2344,6 +2734,7 @@
   }
 
   window.onload = function() {
+    bindActionMenuDelegation();
     applyLanguage();
     loadRegisteredTesterNames();
     loadRegisteredRobotNames();

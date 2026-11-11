@@ -6,11 +6,25 @@
   var activeBaseDepthObstacle = '3cm';
   var baseDepthShowReference = false;
   var baseDepthPasteObstacle = '3cm';
+  var baseDepthFixedRealDistances = { '3cm':['32','106','35.9','35.9','120','120'], '2.5cm':['','','','','',''], '2cm':['','','','','',''] };
+  var baseDepthInlineEditSheetRow = null;
+  var baseDepthChoiceActiveIndex = { robot:-1, sw:-1 };
+  var baseDepthChoicePositionBound = false;
   var baseDepthCohortFilter = 'all';
+  var baseDepthStatusFilter = 'all';
   var baseDepthRobotFilter = '';
+  var baseDepthRobotFilterTimer = 0;
   var baseDepthSidebarCollapsed = false;
-  var baseDepthFovFocusedRobotId = '';
   var baseDepthFovZoom = 1;
+  var baseDepthFovObstacle = '3cm';
+  var baseDepthFovViewMode = 'overlay';
+  var baseDepthFovRunFilter = '';
+  var baseDepthFovSelectedRuns = {};
+  var baseDepthFovResizeBound = false;
+  var baseDepthFovDrawFrame = 0;
+  var BASE_DEPTH_FOV_COLORS = ['#2563eb','#7c3aed','#059669','#ea580c','#db2777','#0891b2','#ca8a04','#475569'];
+  var baseDepthGuideLastFocus = null;
+  var baseDepthGuideAnimationFrame = 0;
   var BASE_DEPTH_TOLERANCE_M = 0.05;
   var BASE_DEPTH_REFERENCE_COORDS = {
     '3cm': { 1:{x:22,y:0}, 2:{x:100,y:0}, 3:{x:22,y:-18}, 4:{x:22,y:18}, 5:{x:100,y:-58}, 6:{x:100,y:58} },
@@ -109,7 +123,19 @@
 
   function selectBaseDepthRobot(robotId) { activeBaseDepthRobotId = robotId; if (rawModuleResponse) renderBaseDepthMasterDetail(rawModuleResponse, groupModuleRowsByRobot(rawModuleResponse)); }
   function setBaseDepthCohortFilter(filter) { baseDepthCohortFilter = filter || 'all'; if (rawModuleResponse) renderBaseDepthMasterDetail(rawModuleResponse, groupModuleRowsByRobot(rawModuleResponse)); }
-  function setBaseDepthRobotFilter(value) { baseDepthRobotFilter = String(value || '').toLowerCase().trim(); if (rawModuleResponse) renderBaseDepthMasterDetail(rawModuleResponse, groupModuleRowsByRobot(rawModuleResponse)); }
+  function setBaseDepthStatusFilter(filter) { baseDepthStatusFilter = filter || 'all'; if (rawModuleResponse) renderBaseDepthMasterDetail(rawModuleResponse, groupModuleRowsByRobot(rawModuleResponse)); }
+  function setBaseDepthRobotFilter(value) {
+    baseDepthRobotFilter = String(value || '').toLowerCase().trim();
+    if (baseDepthRobotFilterTimer) clearTimeout(baseDepthRobotFilterTimer);
+    baseDepthRobotFilterTimer = setTimeout(function() {
+      baseDepthRobotFilterTimer = 0;
+      if (!rawModuleResponse) return;
+      renderBaseDepthMasterDetail(rawModuleResponse, groupModuleRowsByRobot(rawModuleResponse));
+      var input = document.querySelector('.bd-robot-search');
+      if (input) { input.focus({ preventScroll:true }); input.setSelectionRange(input.value.length, input.value.length); }
+    }, 140);
+  }
+  function resetBaseDepthFilters() { baseDepthCohortFilter = 'all'; baseDepthStatusFilter = 'all'; baseDepthRobotFilter = ''; if (rawModuleResponse) renderBaseDepthMasterDetail(rawModuleResponse, groupModuleRowsByRobot(rawModuleResponse)); }
   function selectBaseDepthObstacle(size) { activeBaseDepthObstacle = size === '2.5cm' || size === '2cm' ? size : '3cm'; if (rawModuleResponse) renderBaseDepthMasterDetail(rawModuleResponse, groupModuleRowsByRobot(rawModuleResponse)); }
   function toggleBaseDepthReferenceData(checked) { baseDepthShowReference = !!checked; if (rawModuleResponse) renderBaseDepthMasterDetail(rawModuleResponse, groupModuleRowsByRobot(rawModuleResponse)); }
   function toggleBaseDepthSidebar() { baseDepthSidebarCollapsed = !baseDepthSidebarCollapsed; if (rawModuleResponse) renderBaseDepthMasterDetail(rawModuleResponse, groupModuleRowsByRobot(rawModuleResponse)); }
@@ -120,7 +146,7 @@
     modal = document.createElement('div');
     modal.id = 'baseDepthFovModal';
     modal.className = 'modal-overlay base-depth-fov-overlay';
-    modal.onclick = function(event) { if (event.target === modal) modal.style.display = 'none'; };
+    modal.onclick = function(event) { if (event.target === modal) closeBaseDepthFovModal(); };
     document.body.appendChild(modal);
     return modal;
   }
@@ -129,112 +155,200 @@
     if (!rawModuleResponse) return;
     var modal = ensureBaseDepthFovModal();
     var groups = groupModuleRowsByRobot(rawModuleResponse) || [];
-    var obstacles = ['3cm','2.5cm','2cm'].map(function(size) { return '<label class="fov-check"><input type="checkbox" class="fov-obstacle" value="' + size + '" checked onchange="renderFovChart()"> ' + size + '</label>'; }).join('');
-    baseDepthFovFocusedRobotId = activeBaseDepthRobotId || '';
+    baseDepthFovSelectedRuns = {};
+    groups.forEach(function(group, index) { baseDepthFovSelectedRuns[group.id] = group.id === activeBaseDepthRobotId || (!activeBaseDepthRobotId && index === 0); });
+    baseDepthFovRunFilter = '';
+    baseDepthFovObstacle = activeBaseDepthObstacle === '3cm' ? '3cm' : 'combined';
+    baseDepthFovViewMode = 'overlay';
     baseDepthFovZoom = 1;
-    modal.innerHTML = '<div class="modal-box base-depth-fov-modal" role="dialog" aria-modal="true" aria-labelledby="baseDepthFovTitle"><div class="base-depth-fov-header"><h3 id="baseDepthFovTitle">Base Depth Camera FOV (Top View)</h3><button type="button" onclick="document.getElementById(\'baseDepthFovModal\').style.display=\'none\'" aria-label="Close">×</button></div><div class="fov-controls"><span class="fov-series-label">Obstacle</span>' + obstacles + '<label class="fov-field fov-series-picker">Robot series<select id="fovSeriesSelect" onchange="renderFovChart()"><option value="DVT1">DVT1 robots</option><option value="DVT2">DVT2 robots</option><option value="OTHER">Other robots</option><option value="ALL">All series</option></select></label></div><div id="fovPlots" class="fov-plots"></div></div>';
+    modal.innerHTML = '<div class="base-depth-fov-modal" role="dialog" aria-modal="true" aria-labelledby="baseDepthFovTitle"><header class="base-depth-fov-header"><div><span>ENGINEERING INSPECTION</span><h3 id="baseDepthFovTitle">Base Depth Camera FOV</h3><p>Choose one measurement family or compare all obstacle heights in the same coordinate frame.</p></div><button type="button" onclick="closeBaseDepthFovModal()" aria-label="Close FOV inspection"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg></button></header><div class="fov-engineering-toolbar"><div class="fov-toolbar-group"><span>Obstacle family</span><div class="fov-segmented" id="fovObstacleSegments"><button type="button" data-value="3cm" onclick="setBaseDepthFovObstacle(\'3cm\')">3 cm</button><button type="button" data-value="combined" onclick="setBaseDepthFovObstacle(\'combined\')">2 / 2.5 cm</button><button type="button" data-value="all" onclick="setBaseDepthFovObstacle(\'all\')">All</button></div></div><div class="fov-toolbar-group"><span>Layout</span><div class="fov-segmented" id="fovViewSegments"><button type="button" data-value="overlay" onclick="setBaseDepthFovViewMode(\'overlay\')">Overlay</button><button type="button" data-value="grid" onclick="setBaseDepthFovViewMode(\'grid\')">Grid</button></div></div><div class="fov-canvas-tools" aria-label="Canvas controls"><button type="button" onclick="zoomBaseDepthFov(-.25)" aria-label="Zoom out" title="Zoom out"><svg viewBox="0 0 18 18"><circle cx="7.5" cy="7.5" r="4.5"/><path d="M11 11l4 4M5.5 7.5h4"/></svg></button><button type="button" onclick="resetBaseDepthFovZoom()" aria-label="Reset to fit" title="Reset to fit"><svg viewBox="0 0 18 18"><path d="M3 7V3h4M15 11v4h-4M15 7V3h-4M3 11v4h4"/></svg></button><button type="button" onclick="zoomBaseDepthFov(.25)" aria-label="Zoom in" title="Zoom in"><svg viewBox="0 0 18 18"><circle cx="7.5" cy="7.5" r="4.5"/><path d="M11 11l4 4M5.5 7.5h4M7.5 5.5v4"/></svg></button></div><button type="button" class="fov-export-button" onclick="exportBaseDepthFovPlots()">Export</button></div><div class="fov-engineering-workspace"><main class="fov-engineering-stage"><canvas id="baseDepthFovCanvas" class="fov-engineering-canvas"></canvas><div class="fov-plot-status"><span id="fovVisibleRunCount">0 runs</span><code id="fovViewportLabel">X −40…160 · Y −60…60 cm</code></div></main><aside class="fov-run-sidebar"><header><div><span>COMPARISON RUNS</span><strong id="fovRunSummary">0 selected</strong></div><div class="fov-run-actions"><button type="button" onclick="showOnlyActiveBaseDepthFovRun()">Current</button><button type="button" onclick="selectAllBaseDepthFovRuns()">All</button></div></header><label class="fov-run-search"><span aria-hidden="true">⌕</span><input type="search" placeholder="Filter run ID…" oninput="setBaseDepthFovRunFilter(this.value)" aria-label="Filter FOV test runs"></label><div id="fovRunList" class="fov-run-list"></div></aside></div></div>';
     modal.style.display = 'flex';
     renderFovChart();
+    bindBaseDepthFovCanvas();
+  }
+
+  function closeBaseDepthFovModal() {
+    var modal = document.getElementById('baseDepthFovModal');
+    if (modal) modal.style.display = 'none';
+    var tooltip = document.getElementById('baseDepthFovPointTooltip');
+    if (tooltip) tooltip.style.display = 'none';
   }
 
   function getBaseDepthFovPoint(row, size, pointNumber) {
-    var status = getBaseDepthDisplayedStatus(row).toUpperCase();
     var measuredX = baseDepthNumber(row[15]);
     var measuredY = baseDepthNumber(row[16]);
-    if (status === 'FAIL' && measuredX !== null && measuredY !== null) return { x:measuredX, y:measuredY, source:'measured' };
+    if (measuredX !== null && measuredY !== null) return { x:measuredX, y:measuredY, source:'measured' };
     var ref = (BASE_DEPTH_REFERENCE_COORDS[size] || BASE_DEPTH_REFERENCE_COORDS['2cm'])[pointNumber] || {x:30,y:0};
     return { x:ref.x, y:ref.y, source:'reference' };
   }
 
   function baseDepthFovPoints(rows, size) {
-    var points = {};
+    var points = [];
     (rows || []).forEach(function(row) {
-      if (normalizeBaseDepthObstacle(row[5]) !== size) return;
+      var rowSize = normalizeBaseDepthObstacle(row[5]);
+      var matches = size === 'all' || (size === 'combined' && (rowSize === '2cm' || rowSize === '2.5cm')) || rowSize === size;
+      if (!matches) return;
       var pointNumber = parseInt(row[6], 10);
-      if (pointNumber >= 1 && pointNumber <= 6) points[pointNumber] = getBaseDepthFovPoint(row, size, pointNumber);
+      if (pointNumber >= 1 && pointNumber <= 6) points.push({ size:rowSize, point:String(pointNumber), value:getBaseDepthFovPoint(row, rowSize, pointNumber) });
     });
     return points;
   }
 
-  function renderFovChart() {
-    var plotContainer = document.getElementById('fovPlots');
-    if (!plotContainer || !rawModuleResponse) return;
-    var modalBox = plotContainer.closest('.base-depth-fov-modal');
-    if (modalBox) modalBox.classList.toggle('fov-single-mode', !!baseDepthFovFocusedRobotId);
-    var groups = groupModuleRowsByRobot(rawModuleResponse) || [];
-    var selectedObstacles = Array.prototype.slice.call(document.querySelectorAll('.fov-obstacle:checked')).map(function(input) { return input.value; });
-    if (!selectedObstacles.length) selectedObstacles = [activeBaseDepthObstacle];
-    var selectedSeries = (document.getElementById('fovSeriesSelect') || {}).value || 'DVT1';
-    var selectedGroups = groups.filter(function(item) { var name = String(item.id || '').toUpperCase(); var cohort = name.indexOf('DVT1') !== -1 ? 'DVT1' : (name.indexOf('DVT2') !== -1 ? 'DVT2' : 'OTHER'); return selectedSeries === 'ALL' || cohort === selectedSeries; }).slice(0, 5);
-    if (!selectedGroups.length) selectedGroups = groups.slice(0, 5);
-    if (baseDepthFovFocusedRobotId) {
-      var focused = groups.filter(function(item) { return item.id === baseDepthFovFocusedRobotId; })[0];
-      if (focused) selectedGroups = [focused];
-    }
-    var showAllButton = '<div class="fov-tools">' + (baseDepthFovFocusedRobotId ? '<button type="button" class="fov-view-all" id="fovShowAll">Show all robots</button>' : '') + '<span class="fov-tool-label">Zoom</span><button type="button" class="fov-tool-button" id="fovZoomOut" aria-label="Zoom out">−</button><button type="button" class="fov-tool-button" id="fovZoomReset" aria-label="Reset zoom">Reset</button><button type="button" class="fov-tool-button" id="fovZoomIn" aria-label="Zoom in">+</button><span class="fov-zoom-hint">Use the mouse wheel over a plot</span></div>';
-    plotContainer.innerHTML = showAllButton + selectedGroups.map(function(group, index) { return '<section class="fov-plot-card ' + (baseDepthFovFocusedRobotId ? 'focused' : '') + '" role="button" tabindex="0" data-robot-id="' + escapeHtml(group.id) + '" title="Click to focus this robot"><h4><span class="fov-plot-index">' + (index + 1) + '</span>' + escapeHtml(group.id) + '<span class="fov-card-action">Open plot</span></h4><div class="fov-plot-legend"><span><i class="legend-dot obstacle-3cm"></i>3 cm</span><span><i class="legend-dot obstacle-25cm"></i>2.5 cm</span><span><i class="legend-dot obstacle-2cm"></i>2 cm</span></div><canvas class="fov-plot-canvas" width="760" height="500" data-robot-id="' + escapeHtml(group.id) + '"></canvas></section>'; }).join('');
-    Array.prototype.slice.call(plotContainer.querySelectorAll('.fov-plot-card')).forEach(function(card) {
-      var robotId = card.getAttribute('data-robot-id');
-      card.addEventListener('click', function() { focusBaseDepthFovRobot(robotId); });
-      card.addEventListener('keydown', function(event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); focusBaseDepthFovRobot(robotId); } });
-    });
-    Array.prototype.slice.call(plotContainer.querySelectorAll('.fov-plot-canvas')).forEach(function(canvas) {
-      canvas.addEventListener('mousemove', function(event) {
-        var rect = canvas.getBoundingClientRect();
-        var x = (event.clientX - rect.left) * (canvas.clientWidth / rect.width);
-        var y = (event.clientY - rect.top) * (canvas.clientHeight / rect.height);
-        var hit = (canvas._fovHits || []).reduce(function(closest, item) {
-          var distance = Math.hypot(item.px - x, item.py - y);
-          return distance <= 20 && (!closest || distance < closest.distance) ? { item:item, distance:distance } : closest;
-        }, null);
-        var tooltip = ensureBaseDepthFovPointTooltip();
-        if (!hit) { tooltip.style.display = 'none'; return; }
-        tooltip.innerHTML = '<strong>Point ' + hit.item.point + '</strong><span>' + hit.item.size + '</span><span>Coord: (' + hit.item.x.toFixed(2) + ', ' + hit.item.y.toFixed(2) + ') cm</span><small>' + (hit.item.source === 'measured' ? 'Measured failure coordinate' : 'Reference coordinate') + '</small>';
-        tooltip.style.left = Math.min(event.clientX + 14, window.innerWidth - 245) + 'px';
-        tooltip.style.top = Math.max(8, event.clientY - 70) + 'px';
-        tooltip.style.display = 'flex';
-      });
-      canvas.addEventListener('click', function(event) {
-        canvas.dispatchEvent(new MouseEvent('mousemove', { clientX:event.clientX, clientY:event.clientY, bubbles:false }));
-      });
-      canvas.addEventListener('mouseleave', function() { var tooltip = document.getElementById('baseDepthFovPointTooltip'); if (tooltip) tooltip.style.display = 'none'; });
-      canvas.addEventListener('wheel', function(event) {
-        event.preventDefault();
-        baseDepthFovZoom = Math.max(.5, Math.min(3, baseDepthFovZoom + (event.deltaY < 0 ? .25 : -.25)));
-        renderFovChart();
-      }, { passive:false });
-    });
-    var showAll = document.getElementById('fovShowAll');
-    if (showAll) showAll.onclick = function() { baseDepthFovFocusedRobotId = ''; baseDepthFovZoom = 1; renderFovChart(); };
-    var zoomIn = document.getElementById('fovZoomIn');
-    var zoomOut = document.getElementById('fovZoomOut');
-    var zoomReset = document.getElementById('fovZoomReset');
-    if (zoomIn) zoomIn.onclick = function() { baseDepthFovZoom = Math.min(3, baseDepthFovZoom + .25); renderFovChart(); };
-    if (zoomOut) zoomOut.onclick = function() { baseDepthFovZoom = Math.max(.5, baseDepthFovZoom - .25); renderFovChart(); };
-    if (zoomReset) zoomReset.onclick = function() { baseDepthFovZoom = 1; renderFovChart(); };
-    var exportButton = document.getElementById('fovExportButton');
-    if (exportButton) exportButton.onclick = exportBaseDepthFovPlots;
-    var referenceButton = document.getElementById('fovReferenceButton');
-    if (referenceButton) referenceButton.onclick = openBaseDepthReferenceDiagram;
-    selectedGroups.forEach(function(group) { drawBaseDepthFovPlot(group, selectedObstacles); });
+  function baseDepthFovFamilies() {
+    if (baseDepthFovObstacle === 'all') return ['3cm', '2cm', '2.5cm'];
+    if (baseDepthFovObstacle === 'combined') return ['2cm', '2.5cm'];
+    return [baseDepthFovObstacle];
   }
 
-  function focusBaseDepthFovRobot(robotId) {
-    baseDepthFovFocusedRobotId = robotId || '';
-    activeBaseDepthRobotId = baseDepthFovFocusedRobotId;
+  function renderFovChart() {
+    var canvas = document.getElementById('baseDepthFovCanvas');
+    if (!canvas || !rawModuleResponse) return;
+    var groups = groupModuleRowsByRobot(rawModuleResponse) || [];
+    var selectedGroups = groups.filter(function(group) { return baseDepthFovSelectedRuns[group.id] !== false; });
+    renderBaseDepthFovRunList(groups, selectedGroups.length);
+    updateBaseDepthFovControls(selectedGroups.length);
+    drawBaseDepthFovInspection(canvas, selectedGroups);
+  }
+
+  function redrawBaseDepthFovCanvas() {
+    var canvas = document.getElementById('baseDepthFovCanvas');
+    if (!canvas || !rawModuleResponse) return;
+    var groups = groupModuleRowsByRobot(rawModuleResponse) || [];
+    var selectedGroups = groups.filter(function(group) { return baseDepthFovSelectedRuns[group.id] !== false; });
+    updateBaseDepthFovControls(selectedGroups.length);
+    drawBaseDepthFovInspection(canvas, selectedGroups);
+  }
+
+  function scheduleBaseDepthFovRedraw() {
+    if (baseDepthFovDrawFrame) cancelAnimationFrame(baseDepthFovDrawFrame);
+    baseDepthFovDrawFrame = requestAnimationFrame(function() {
+      baseDepthFovDrawFrame = 0;
+      redrawBaseDepthFovCanvas();
+    });
+  }
+
+  function renderBaseDepthFovRunList(groups, selectedCount) {
+    var list = document.getElementById('fovRunList');
+    if (!list) return;
+    var filtered = groups.map(function(group, index) { return { group:group, index:index }; }).filter(function(item) {
+      return !baseDepthFovRunFilter || String(item.group.id || '').toLowerCase().indexOf(baseDepthFovRunFilter) !== -1;
+    });
+    list.innerHTML = filtered.map(function(item) {
+      var group = item.group, index = item.index;
+      var color = BASE_DEPTH_FOV_COLORS[index % BASE_DEPTH_FOV_COLORS.length];
+      var selected = baseDepthFovSelectedRuns[group.id] !== false;
+      return '<label class="fov-run-item ' + (selected ? 'is-selected' : '') + '"><input type="checkbox" ' + (selected ? 'checked ' : '') + 'onchange="toggleBaseDepthFovRunByIndex(' + index + ',this.checked)"><i style="--run-color:' + color + '"></i><span><strong>' + escapeHtml(group.id) + '</strong><small>' + group.rows.length + ' samples</small></span><em>' + (selected ? 'Visible' : 'Hidden') + '</em></label>';
+    }).join('');
+    if (!filtered.length) list.innerHTML = '<div class="fov-run-empty">No matching run</div>';
+    var summary = document.getElementById('fovRunSummary');
+    if (summary) summary.textContent = selectedCount + ' of ' + groups.length + ' selected';
+  }
+
+  function setBaseDepthFovRunFilter(value) {
+    baseDepthFovRunFilter = String(value || '').trim().toLowerCase();
+    var groups = groupModuleRowsByRobot(rawModuleResponse) || [];
+    renderBaseDepthFovRunList(groups, groups.filter(function(group) { return baseDepthFovSelectedRuns[group.id] !== false; }).length);
+  }
+
+  function showOnlyActiveBaseDepthFovRun() {
+    var groups = groupModuleRowsByRobot(rawModuleResponse) || [];
+    groups.forEach(function(group, index) { baseDepthFovSelectedRuns[group.id] = group.id === activeBaseDepthRobotId || (!activeBaseDepthRobotId && index === 0); });
     renderFovChart();
   }
 
+  function selectAllBaseDepthFovRuns() {
+    var groups = groupModuleRowsByRobot(rawModuleResponse) || [];
+    groups.forEach(function(group) { baseDepthFovSelectedRuns[group.id] = true; });
+    renderFovChart();
+  }
+
+  function updateBaseDepthFovControls(selectedCount) {
+    Array.prototype.forEach.call(document.querySelectorAll('#fovObstacleSegments button'), function(button) { button.classList.toggle('active', button.dataset.value === baseDepthFovObstacle); });
+    Array.prototype.forEach.call(document.querySelectorAll('#fovViewSegments button'), function(button) { button.classList.toggle('active', button.dataset.value === baseDepthFovViewMode); });
+    var count = document.getElementById('fovVisibleRunCount');
+    if (count) count.textContent = selectedCount + (selectedCount === 1 ? ' run' : ' runs') + ' visible';
+    var viewport = document.getElementById('fovViewportLabel');
+    if (viewport) {
+      var xHalf = 100 / baseDepthFovZoom, yHalf = 60 / baseDepthFovZoom;
+      viewport.textContent = 'X ' + Math.round(60-xHalf) + '…' + Math.round(60+xHalf) + ' · Y ' + Math.round(-yHalf) + '…' + Math.round(yHalf) + ' cm';
+    }
+  }
+
+  function setBaseDepthFovObstacle(size) {
+    baseDepthFovObstacle = ['3cm', 'combined', 'all'].indexOf(size) !== -1 ? size : '3cm';
+    baseDepthFovZoom = 1;
+    redrawBaseDepthFovCanvas();
+  }
+
+  function setBaseDepthFovViewMode(mode) {
+    baseDepthFovViewMode = mode === 'grid' ? 'grid' : 'overlay';
+    baseDepthFovZoom = 1;
+    redrawBaseDepthFovCanvas();
+  }
+
+  function toggleBaseDepthFovRun(robotId, selected) {
+    baseDepthFovSelectedRuns[robotId] = !!selected;
+    renderFovChart();
+  }
+
+  function toggleBaseDepthFovRunByIndex(index, selected) {
+    var groups = groupModuleRowsByRobot(rawModuleResponse) || [];
+    if (groups[index]) toggleBaseDepthFovRun(groups[index].id, selected);
+  }
+
+  function toggleAllBaseDepthFovRuns() {
+    var groups = groupModuleRowsByRobot(rawModuleResponse) || [];
+    var shouldSelect = groups.some(function(group) { return baseDepthFovSelectedRuns[group.id] === false; });
+    groups.forEach(function(group) { baseDepthFovSelectedRuns[group.id] = shouldSelect; });
+    renderFovChart();
+  }
+
+  function zoomBaseDepthFov(delta) {
+    baseDepthFovZoom = Math.max(.75, Math.min(3, baseDepthFovZoom + delta));
+    scheduleBaseDepthFovRedraw();
+  }
+
+  function resetBaseDepthFovZoom() { baseDepthFovZoom = 1; redrawBaseDepthFovCanvas(); }
+
+  function bindBaseDepthFovCanvas() {
+    var canvas = document.getElementById('baseDepthFovCanvas');
+    if (!canvas || canvas.dataset.bound === 'true') return;
+    canvas.dataset.bound = 'true';
+    canvas.addEventListener('mousemove', handleBaseDepthFovHover);
+    canvas.addEventListener('mouseleave', function() { var tooltip = document.getElementById('baseDepthFovPointTooltip'); if (tooltip) tooltip.style.display = 'none'; });
+    canvas.addEventListener('wheel', function(event) { event.preventDefault(); zoomBaseDepthFov(event.deltaY < 0 ? .25 : -.25); }, { passive:false });
+    if (!baseDepthFovResizeBound) {
+      baseDepthFovResizeBound = true;
+      window.addEventListener('resize', function() {
+        var modal = document.getElementById('baseDepthFovModal');
+        if (modal && modal.style.display !== 'none') scheduleBaseDepthFovRedraw();
+      }, { passive:true });
+    }
+  }
+
+  function handleBaseDepthFovHover(event) {
+    var canvas = event.currentTarget;
+    var rect = canvas.getBoundingClientRect();
+    var x = event.clientX - rect.left, y = event.clientY - rect.top;
+    var hit = (canvas._fovHits || []).reduce(function(best, item) {
+      var distance = Math.hypot(item.px - x, item.py - y);
+      return distance <= 14 && (!best || distance < best.distance) ? { item:item, distance:distance } : best;
+    }, null);
+    var tooltip = ensureBaseDepthFovPointTooltip();
+    if (!hit) { tooltip.style.display = 'none'; return; }
+    tooltip.innerHTML = '<strong>' + escapeHtml(hit.item.run) + ' · P' + hit.item.point + '</strong><code>(' + hit.item.x.toFixed(2) + ', ' + hit.item.y.toFixed(2) + ') cm</code><span>Δ ' + hit.item.delta.toFixed(2) + ' cm</span>';
+    tooltip.style.left = Math.min(event.clientX + 14, window.innerWidth - 280) + 'px';
+    tooltip.style.top = Math.max(8, event.clientY - 58) + 'px';
+    tooltip.style.display = 'flex';
+  }
+
   function exportBaseDepthFovPlots() {
-    var canvases = Array.prototype.slice.call(document.querySelectorAll('.fov-plot-canvas'));
-    if (!canvases.length) return;
-    canvases.forEach(function(canvas, index) {
-      var robotId = canvas.getAttribute('data-robot-id') || ('robot-' + (index + 1));
-      var link = document.createElement('a');
-      link.download = 'base-depth-fov-' + robotId.replace(/[^a-z0-9_-]+/gi, '_') + '.png';
-      link.href = canvas.toDataURL('image/png');
-      link.click();
-    });
+    var canvas = document.getElementById('baseDepthFovCanvas');
+    if (!canvas) return;
+    var link = document.createElement('a');
+    link.download = 'base-depth-fov-' + baseDepthFovViewMode + '-' + baseDepthFovObstacle.replace(/[^a-z0-9]+/gi, '_') + '.png';
+    link.href = canvas.toDataURL('image/png');
+    link.click();
   }
 
   function exportBaseDepthFovFromMain() {
@@ -242,15 +356,108 @@
     setTimeout(exportBaseDepthFovPlots, 80);
   }
 
-  function openBaseDepthReferenceDiagram() {
-    var preview = document.getElementById('baseDepthReferencePreview') || document.createElement('div');
-    preview.id = 'baseDepthReferencePreview';
-    preview.className = 'base-depth-reference-preview';
-    preview.innerHTML = '<div class="base-depth-reference-box" role="dialog" aria-modal="true" aria-label="Base Depth reference diagram"><div class="base-depth-reference-header"><strong>Base Depth reference geometry</strong><button type="button" aria-label="Close reference diagram">×</button></div><div class="base-depth-reference-stage"><img src="base-depth-fov-reference.svg" alt="Reference geometry for 3 centimetre and 2 centimetre detection areas"></div></div>';
-    preview.onclick = function(event) { if (event.target === preview || event.target.tagName === 'BUTTON') preview.style.display = 'none'; };
-    if (!preview.parentNode) document.body.appendChild(preview);
-    preview.style.display = 'flex';
+  function getBaseDepthPlacementGuideMarkup() {
+    var template = document.getElementById('baseDepthPlacementGuideTemplate');
+    return template ? template.innerHTML : '<p class="base-depth-guide-missing">Object placement guide is unavailable.</p>';
   }
+
+  function ensureBaseDepthPlacementDrawer() {
+    var drawer = document.getElementById('baseDepthPlacementDrawer');
+    if (drawer) return drawer;
+    drawer = document.createElement('div');
+    drawer.id = 'baseDepthPlacementDrawer';
+    drawer.className = 'base-depth-guide-overlay';
+    drawer.hidden = true;
+    drawer.innerHTML = '<aside class="base-depth-guide-drawer" role="dialog" aria-modal="true" aria-labelledby="baseDepthGuideTitle" aria-describedby="baseDepthGuideSubtitle" tabindex="-1">' +
+      '<header class="base-depth-guide-header"><div><span class="base-depth-guide-kicker">TEST SETUP REFERENCE</span><h2 id="baseDepthGuideTitle">Object Placement Guide</h2><p id="baseDepthGuideSubtitle">Place each obstacle at points 1–6 before recording the Base Depth test.</p></div><button type="button" class="base-depth-guide-close" onclick="closeBaseDepthPlacementDrawer()" aria-label="Close object placement guide"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg></button></header>' +
+      '<div class="base-depth-guide-body"><section class="base-depth-guide-summary" aria-label="Placement specifications"><div class="base-depth-guide-tags"><span><i class="guide-dot guide-dot-red"></i>3 cm detection area</span><span><i class="guide-dot guide-dot-blue"></i>2 / 2.5 cm detection area</span><span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 12.5l10-10M5 2.5h7.5V10"/></svg>Coordinates in cm</span></div><p>The diagrams show physical object placement only. Measured robot results remain available in <strong>View FOV Plot</strong>.</p></section><div class="base-depth-guide-tabs" role="tablist" aria-label="Detection area"><button type="button" role="tab" aria-selected="true" onclick="setBaseDepthGuidePanel(\'3cm\',this)"><i class="guide-dot guide-dot-red"></i>3 cm area</button><button type="button" role="tab" aria-selected="false" tabindex="-1" onclick="setBaseDepthGuidePanel(\'2cm\',this)"><i class="guide-dot guide-dot-blue"></i>2 / 2.5 cm area</button></div><figure class="base-depth-guide-figure">' + getBaseDepthPlacementGuideMarkup() + '<figcaption id="baseDepthGuideCaption">3 cm detection area · Top view and six numbered positions</figcaption></figure></div>' +
+      '</aside>';
+    drawer.addEventListener('click', function(event) { if (event.target === drawer) closeBaseDepthPlacementDrawer(); });
+    drawer.addEventListener('keydown', function(event) {
+      if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && event.target.getAttribute('role') === 'tab') {
+        event.preventDefault();
+        var tabs = Array.prototype.slice.call(drawer.querySelectorAll('.base-depth-guide-tabs [role="tab"]'));
+        var nextIndex = (tabs.indexOf(event.target) + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+        tabs[nextIndex].click();
+        tabs[nextIndex].focus();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      var focusable = drawer.querySelectorAll('button:not([disabled]):not([tabindex="-1"]), [href], [tabindex]:not([tabindex="-1"])');
+      if (!focusable.length) return;
+      var first = focusable[0], last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    });
+    document.body.appendChild(drawer);
+    setBaseDepthGuidePanel('3cm', drawer.querySelector('[role="tab"]'));
+    return drawer;
+  }
+
+  function setBaseDepthGuidePanel(panel, trigger) {
+    var drawer = document.getElementById('baseDepthPlacementDrawer');
+    if (!drawer) return;
+    var isThreeCentimetre = panel !== '2cm';
+    var diagram = drawer.querySelector('.base-depth-placement-svg');
+    if (diagram) {
+      diagram.setAttribute('viewBox', isThreeCentimetre ? '0 0 402.5 327' : '402.5 0 402.5 327');
+      diagram.setAttribute('aria-label', isThreeCentimetre ? 'Three centimetre object placement guide' : 'Two and two point five centimetre object placement guide');
+    }
+    Array.prototype.forEach.call(drawer.querySelectorAll('.base-depth-guide-tabs [role="tab"]'), function(tab) {
+      var selected = tab === trigger;
+      tab.setAttribute('aria-selected', selected ? 'true' : 'false');
+      tab.tabIndex = selected ? 0 : -1;
+    });
+    var caption = document.getElementById('baseDepthGuideCaption');
+    if (caption) caption.textContent = (isThreeCentimetre ? '3 cm' : '2 / 2.5 cm') + ' detection area · Top view and six numbered positions';
+  }
+
+  function openBaseDepthPlacementDrawer(trigger) {
+    var drawer = ensureBaseDepthPlacementDrawer();
+    baseDepthGuideLastFocus = trigger || document.activeElement;
+    drawer.hidden = false;
+    document.body.classList.add('base-depth-guide-open');
+    if (baseDepthGuideAnimationFrame) cancelAnimationFrame(baseDepthGuideAnimationFrame);
+    baseDepthGuideAnimationFrame = requestAnimationFrame(function() {
+      baseDepthGuideAnimationFrame = 0;
+      drawer.classList.add('is-open');
+      var panel = drawer.querySelector('.base-depth-guide-drawer');
+      if (panel) panel.focus({ preventScroll:true });
+    });
+  }
+
+  function prewarmBaseDepthPlacementDrawer() {
+    if (document.getElementById('baseDepthPlacementDrawer')) return;
+    var prepare = function() { if (currentTab === 'basedepth') ensureBaseDepthPlacementDrawer(); };
+    if ('requestIdleCallback' in window) window.requestIdleCallback(prepare, { timeout:900 });
+    else window.setTimeout(prepare, 120);
+  }
+
+  function closeBaseDepthPlacementDrawer() {
+    var drawer = document.getElementById('baseDepthPlacementDrawer');
+    if (!drawer || drawer.hidden) return;
+    if (baseDepthGuideAnimationFrame) {
+      cancelAnimationFrame(baseDepthGuideAnimationFrame);
+      baseDepthGuideAnimationFrame = 0;
+    }
+    drawer.classList.remove('is-open');
+    document.body.classList.remove('base-depth-guide-open');
+    window.setTimeout(function() {
+      if (!drawer.classList.contains('is-open')) drawer.hidden = true;
+    }, 200);
+    if (baseDepthGuideLastFocus && baseDepthGuideLastFocus.focus) baseDepthGuideLastFocus.focus({ preventScroll:true });
+  }
+
+  function openBaseDepthReferenceDiagram() {
+    openBaseDepthPlacementDrawer(document.activeElement);
+  }
+
+  document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') {
+      closeBaseDepthPlacementDrawer();
+      closeBaseDepthFovModal();
+    }
+  });
 
   function ensureBaseDepthFovPointTooltip() {
     var tooltip = document.getElementById('baseDepthFovPointTooltip');
@@ -262,59 +469,116 @@
     return tooltip;
   }
 
-  function drawBaseDepthFovPlot(group, selectedObstacles) {
-    var canvas = Array.prototype.slice.call(document.querySelectorAll('.fov-plot-canvas')).filter(function(item) { return item.getAttribute('data-robot-id') === group.id; })[0];
-    if (!canvas) return;
-    var cssWidth = canvas.clientWidth || 760;
-    var naturalHeight = Math.round(cssWidth * 500 / 760);
-    var cssHeight = baseDepthFovFocusedRobotId ? Math.min(naturalHeight, Math.max(320, window.innerHeight - 300)) : naturalHeight;
-    var pixelRatio = Math.min(window.devicePixelRatio || 1, 3);
-    canvas.width = Math.round(cssWidth * pixelRatio);
-    canvas.height = Math.round(cssHeight * pixelRatio);
-    canvas.style.height = cssHeight + 'px';
+  function drawBaseDepthFovInspection(canvas, groups) {
+    var stage = canvas.parentElement;
+    var width = Math.max(620, stage.clientWidth || 900);
+    var height = baseDepthFovViewMode === 'grid'
+      ? Math.max(stage.clientHeight || 560, Math.ceil(groups.length / 2) * 270)
+      : Math.max(430, stage.clientHeight || 560);
+    var pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.style.width = width + 'px';
+    canvas.style.height = height + 'px';
+    canvas.width = Math.round(width * pixelRatio);
+    canvas.height = Math.round(height * pixelRatio);
     var ctx = canvas.getContext('2d');
     ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-    var width = cssWidth, height = cssHeight;
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = '#f8fafc'; ctx.fillRect(0, 0, width, height);
-    var all = [];
-    selectedObstacles.forEach(function(size) { var points = baseDepthFovPoints(group.rows, size); Object.keys(points).forEach(function(key) { all.push(points[key]); }); });
-    if (!all.length) { ctx.fillStyle = '#64748b'; ctx.font = '14px Inter, sans-serif'; ctx.textAlign = 'center'; ctx.fillText('No coordinate data available', width / 2, height / 2); return; }
-    var minX = Math.min(-40, Math.min.apply(null, all.map(function(point) { return point.x; })) - 10);
-    var maxX = Math.max(110, Math.max.apply(null, all.map(function(point) { return point.x; })) + 10);
-    var minY = Math.min(-70, Math.min.apply(null, all.map(function(point) { return point.y; })) - 10);
-    var maxY = Math.max(70, Math.max.apply(null, all.map(function(point) { return point.y; })) + 10);
-    var centerX = (minX + maxX) / 2, centerY = (minY + maxY) / 2;
-    var xHalf = (maxX - minX) / (2 * baseDepthFovZoom), yHalf = (maxY - minY) / (2 * baseDepthFovZoom);
-    minX = centerX - xHalf; maxX = centerX + xHalf; minY = centerY - yHalf; maxY = centerY + yHalf;
-    var pad = { left:52, right:20, top:28, bottom:42 };
-    var sx = function(x) { return pad.left + (x - minX) / (maxX - minX) * (width - pad.left - pad.right); };
-    var sy = function(y) { return height - pad.bottom - (y - minY) / (maxY - minY) * (height - pad.top - pad.bottom); };
     canvas._fovHits = [];
-    ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1; ctx.font = '10px Inter, sans-serif'; ctx.fillStyle = '#64748b'; ctx.textAlign = 'center';
-    for (var gx = Math.ceil(minX / 20) * 20; gx <= maxX; gx += 20) { ctx.beginPath(); ctx.moveTo(sx(gx), pad.top); ctx.lineTo(sx(gx), height - pad.bottom); ctx.stroke(); ctx.fillText(gx, sx(gx), height - 16); }
-    ctx.textAlign = 'right';
-    for (var gy = Math.ceil(minY / 20) * 20; gy <= maxY; gy += 20) { ctx.beginPath(); ctx.moveTo(pad.left, sy(gy)); ctx.lineTo(width - pad.right, sy(gy)); ctx.stroke(); ctx.fillText(gy, pad.left - 8, sy(gy) + 3); }
-    ctx.fillStyle = '#334155'; ctx.textAlign = 'center'; ctx.font = '11px Inter, sans-serif'; ctx.fillText('x front (cm)', (pad.left + width - pad.right) / 2, height - 3);
-    ctx.save(); ctx.translate(14, (pad.top + height - pad.bottom) / 2); ctx.rotate(-Math.PI / 2); ctx.fillText('y left (cm)', 0, 0); ctx.restore();
-    ctx.strokeStyle = '#64748b'; ctx.lineWidth = 1.5; ctx.strokeRect(sx(-35), sy(18), sx(-5) - sx(-35), sy(-18) - sy(18)); ctx.fillStyle = '#64748b'; ctx.textAlign = 'center'; ctx.fillText('Robot', sx(-20), sy(-24));
-    ctx.fillStyle = '#475569'; ctx.beginPath(); ctx.arc(sx(0), sy(0), 3, 0, Math.PI * 2); ctx.fill(); ctx.textAlign = 'left'; ctx.font = '10px Inter, sans-serif'; ctx.fillText('(0,0)', sx(0) + 6, sy(0) - 6);
-    var seriesColors = ['#2563eb','#9333ea','#16a34a','#f97316','#e11d48'];
-    [group].forEach(function(group, seriesIndex) {
-      selectedObstacles.forEach(function(size, obstacleIndex) {
-        var pointMap = baseDepthFovPoints(group.rows, size); var points = Object.keys(pointMap).map(function(key) { var point = pointMap[key]; point._pointNumber = key; return point; }).filter(Boolean); if (points.length < 3) return;
-        var centerX = points.reduce(function(sum, point) { return sum + point.x; }, 0) / points.length;
-        var centerY = points.reduce(function(sum, point) { return sum + point.y; }, 0) / points.length;
-        points.sort(function(a, b) { return Math.atan2(a.y - centerY, a.x - centerX) - Math.atan2(b.y - centerY, b.x - centerX); });
-        var obstacleColors = { '3cm':'#2563eb', '2.5cm':'#9333ea', '2cm':'#16a34a' };
-        var color = obstacleColors[size] || seriesColors[seriesIndex];
-        ctx.beginPath(); ctx.moveTo(sx(points[0].x), sy(points[0].y)); points.slice(1).forEach(function(point) { ctx.lineTo(sx(point.x), sy(point.y)); }); ctx.closePath();
-        ctx.fillStyle = color + (obstacleIndex ? '08' : '18'); ctx.fill(); ctx.strokeStyle = color; ctx.setLineDash(obstacleIndex ? [5,3] : []); ctx.lineWidth = 2; ctx.stroke(); ctx.setLineDash([]);
-        points.forEach(function(point) { var plotX = sx(point.x), plotY = sy(point.y); canvas._fovHits.push({ px:plotX, py:plotY, point:point._pointNumber, x:point.x, y:point.y, size:size, source:point.source }); ctx.beginPath(); ctx.arc(plotX, plotY, 5, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill(); ctx.fillStyle = '#0f172a'; ctx.font = '700 11px Inter, sans-serif'; ctx.textAlign = 'left'; ctx.fillText(String(point._pointNumber), plotX + 8, plotY - 8); });
+
+    if (!groups.length) {
+      ctx.fillStyle = '#64748b'; ctx.font = '13px Inter, sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('Select at least one test run', width / 2, height / 2);
+      return;
+    }
+
+    if (baseDepthFovViewMode === 'grid') {
+      var columns = groups.length === 1 ? 1 : 2;
+      var rows = Math.ceil(groups.length / columns);
+      var cellWidth = width / columns, cellHeight = height / rows;
+      groups.forEach(function(group, index) {
+        var area = { x:(index % columns) * cellWidth, y:Math.floor(index / columns) * cellHeight, width:cellWidth, height:cellHeight };
+        ctx.save(); ctx.beginPath(); ctx.rect(area.x, area.y, area.width, area.height); ctx.clip();
+        drawBaseDepthFovViewport(ctx, canvas, [group], area, true);
+        ctx.restore();
       });
+    } else {
+      drawBaseDepthFovViewport(ctx, canvas, groups, { x:0, y:0, width:width, height:height }, false);
+    }
+  }
+
+  function drawBaseDepthFovViewport(ctx, canvas, groups, area, compact) {
+    var centerX = 60, centerY = 0;
+    var xHalf = 100 / baseDepthFovZoom, yHalf = 60 / baseDepthFovZoom;
+    var range = { minX:centerX-xHalf, maxX:centerX+xHalf, minY:centerY-yHalf, maxY:centerY+yHalf };
+    var pad = compact ? { left:46, right:14, top:34, bottom:34 } : { left:58, right:24, top:28, bottom:48 };
+    var left = area.x + pad.left, right = area.x + area.width - pad.right;
+    var top = area.y + pad.top, bottom = area.y + area.height - pad.bottom;
+    var sx = function(x) { return left + (x - range.minX) / (range.maxX - range.minX) * (right - left); };
+    var sy = function(y) { return bottom - (y - range.minY) / (range.maxY - range.minY) * (bottom - top); };
+
+    ctx.fillStyle = '#fff'; ctx.fillRect(area.x + 1, area.y + 1, area.width - 2, area.height - 2);
+    ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1; ctx.strokeRect(area.x + .5, area.y + .5, area.width - 1, area.height - 1);
+    ctx.font = (compact ? '9px' : '10px') + ' "SFMono-Regular",Consolas,monospace';
+    ctx.strokeStyle = '#e8edf3'; ctx.fillStyle = '#64748b';
+    for (var gx = Math.ceil(range.minX / 20) * 20; gx <= range.maxX; gx += 20) {
+      ctx.beginPath(); ctx.moveTo(sx(gx), top); ctx.lineTo(sx(gx), bottom); ctx.stroke();
+      ctx.textAlign = 'center'; ctx.fillText(gx, sx(gx), bottom + 18);
+    }
+    for (var gy = Math.ceil(range.minY / 20) * 20; gy <= range.maxY; gy += 20) {
+      ctx.beginPath(); ctx.moveTo(left, sy(gy)); ctx.lineTo(right, sy(gy)); ctx.stroke();
+      ctx.textAlign = 'right'; ctx.fillText(gy, left - 8, sy(gy) + 3);
+    }
+    ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 1.2;
+    if (range.minY <= 0 && range.maxY >= 0) { ctx.beginPath(); ctx.moveTo(left, sy(0)); ctx.lineTo(right, sy(0)); ctx.stroke(); }
+    if (range.minX <= 0 && range.maxX >= 0) { ctx.beginPath(); ctx.moveTo(sx(0), top); ctx.lineTo(sx(0), bottom); ctx.stroke(); }
+
+    if (!compact) {
+      ctx.fillStyle = '#475569'; ctx.font = '10px Inter, sans-serif'; ctx.textAlign = 'center'; ctx.fillText('X FRONT (cm)', (left + right) / 2, area.y + area.height - 10);
+      ctx.save(); ctx.translate(area.x + 14, (top + bottom) / 2); ctx.rotate(-Math.PI/2); ctx.fillText('Y LEFT (cm)', 0, 0); ctx.restore();
+    }
+    ctx.strokeStyle = '#64748b'; ctx.lineWidth = 1.4;
+    ctx.strokeRect(sx(-35), sy(18), sx(-5)-sx(-35), sy(-18)-sy(18));
+    ctx.fillStyle = '#64748b'; ctx.font = '9px Inter, sans-serif'; ctx.textAlign = 'center'; ctx.fillText('ROBOT', sx(-20), sy(-24));
+
+    var allGroups = groupModuleRowsByRobot(rawModuleResponse) || [];
+    groups.forEach(function(group) {
+      var seriesIndex = allGroups.findIndex(function(candidate) { return candidate.id === group.id; });
+      var color = BASE_DEPTH_FOV_COLORS[(seriesIndex < 0 ? 0 : seriesIndex) % BASE_DEPTH_FOV_COLORS.length];
+      var pointMap = baseDepthFovPoints(group.rows, baseDepthFovObstacle);
+      var points = pointMap.map(function(entry) {
+        var point = entry.value;
+        var reference = (BASE_DEPTH_REFERENCE_COORDS[entry.size] || {})[entry.point] || point;
+        return { point:entry.point, size:entry.size, x:point.x, y:point.y, delta:Math.hypot(point.x-reference.x, point.y-reference.y) };
+      });
+      if (!points.length) return;
+      baseDepthFovFamilies().forEach(function(family, familyIndex) {
+        var familyPoints = points.filter(function(point) { return point.size === family; });
+        if (familyPoints.length < 3) return;
+        var polygon = familyPoints.slice().sort(function(a,b) {
+          var ax = familyPoints.reduce(function(sum,p){return sum+p.x;},0)/familyPoints.length;
+          var ay = familyPoints.reduce(function(sum,p){return sum+p.y;},0)/familyPoints.length;
+          return Math.atan2(a.y-ay,a.x-ax)-Math.atan2(b.y-ay,b.x-ax);
+        });
+        ctx.beginPath(); ctx.moveTo(sx(polygon[0].x),sy(polygon[0].y));
+        polygon.slice(1).forEach(function(point){ctx.lineTo(sx(point.x),sy(point.y));}); ctx.closePath();
+        ctx.fillStyle = fovColorWithAlpha(color, familyIndex ? .045 : .08); ctx.fill(); ctx.strokeStyle = color; ctx.lineWidth = compact ? 1.5 : 2; ctx.setLineDash(familyIndex ? [5,3] : []); ctx.stroke(); ctx.setLineDash([]);
+      });
+      points.forEach(function(point) {
+        var px=sx(point.x), py=sy(point.y);
+        ctx.beginPath(); ctx.arc(px,py,compact?3.5:5,0,Math.PI*2); ctx.fillStyle=color; ctx.fill();
+        var pointLabel = (baseDepthFovObstacle === 'combined' || baseDepthFovObstacle === 'all') ? point.size.replace('cm','') + '·' + point.point : point.point;
+        if (!compact || groups.length === 1) { ctx.fillStyle='#0f172a'; ctx.font='700 10px Inter, sans-serif'; ctx.textAlign='left'; ctx.fillText(pointLabel,px+7,py-7); }
+        canvas._fovHits.push({px:px,py:py,run:group.id,point:pointLabel,x:point.x,y:point.y,delta:point.delta});
+      });
+      if (compact) { ctx.fillStyle=color; ctx.font='700 10px "SFMono-Regular",Consolas,monospace'; ctx.textAlign='left'; ctx.fillText(group.id,area.x+10,area.y+17); }
     });
-    var legendX = pad.left + 8, legendY = pad.top + 12; ctx.textAlign = 'left'; ctx.font = '11px Inter, sans-serif';
-    ctx.fillStyle = '#334155'; ctx.fillText(group.id, legendX + 12, legendY);
+  }
+
+  function fovColorWithAlpha(hex, alpha) {
+    var value = String(hex || '#2563eb').replace('#','');
+    var number = parseInt(value,16);
+    return 'rgba(' + ((number>>16)&255) + ',' + ((number>>8)&255) + ',' + (number&255) + ',' + alpha + ')';
   }
 
   function renderBaseDepthMasterDetail(response, groups) {
@@ -323,11 +587,13 @@
     var columns = getBaseDepthColumns(response);
     var visibleGroups = (groups || groupModuleRowsByRobot(response)).filter(function(group) {
       var cohortMatch = baseDepthCohortFilter === 'all' || String(group.id || '').toUpperCase().indexOf(baseDepthCohortFilter.toUpperCase()) !== -1;
+      var state = getBaseDepthGroupState(group, columns);
+      var statusMatch = baseDepthStatusFilter === 'all' || state.key === baseDepthStatusFilter;
       var textMatch = !baseDepthRobotFilter || String(group.id || '').toLowerCase().indexOf(baseDepthRobotFilter) !== -1;
       var globalMatch = !searchQuery || group.rows.some(function(row) { return row.join(' ').toLowerCase().indexOf(searchQuery) !== -1; });
-      return cohortMatch && textMatch && globalMatch;
+      return cohortMatch && statusMatch && textMatch && globalMatch;
     });
-    if (!visibleGroups.length) { container.innerHTML = '<div class="panel-card smart-empty compact"><h3>No matching robot</h3><p>Try another Robot ID, tester, date, or measurement.</p></div>'; return; }
+    if (!visibleGroups.length) { container.innerHTML = '<div class="panel-card smart-empty compact"><h3>No matching robot</h3><p>Try another Robot ID, cohort, or status.</p><button type="button" class="btn-ctrl" onclick="resetBaseDepthFilters()">Reset filters</button></div>'; return; }
     var activeGroup = visibleGroups.filter(function(group) { return group.id === activeBaseDepthRobotId; })[0] || visibleGroups[0];
     activeBaseDepthRobotId = activeGroup.id;
     var obstacleRows = getBaseDepthObstacleRows(activeGroup, columns);
@@ -335,7 +601,7 @@
     var date = lastBaseDepthGroupValue(activeGroup, columns.date) || 'Not recorded';
     var tester = lastBaseDepthGroupValue(activeGroup, columns.tester) || 'Unassigned';
     var sw = lastBaseDepthGroupValue(activeGroup, columns.sw) || 'Not recorded';
-    var html = '<section class="base-depth-master-detail"><aside class="base-depth-master table-card"><header class="bd-robot-list-header"><div><span>ROBOTS</span><strong>' + visibleGroups.length + ' units</strong></div><input class="bd-robot-search" type="search" placeholder="Search robot…" value="' + escapeHtml(baseDepthRobotFilter) + '" oninput="setBaseDepthRobotFilter(this.value)" aria-label="Search Base Depth robots"></header><div class="bd-cohort-filters"><button type="button" class="' + (baseDepthCohortFilter === 'all' ? 'active' : '') + '" onclick="setBaseDepthCohortFilter(\'all\')">All</button><button type="button" class="' + (baseDepthCohortFilter === 'DVT1' ? 'active' : '') + '" onclick="setBaseDepthCohortFilter(\'DVT1\')">DVT1</button><button type="button" class="' + (baseDepthCohortFilter === 'DVT2' ? 'active' : '') + '" onclick="setBaseDepthCohortFilter(\'DVT2\')">DVT2</button></div><div class="base-depth-master-list">';
+    var html = '<section class="base-depth-master-detail"><aside class="base-depth-master table-card"><header class="bd-robot-list-header"><div><span>ROBOTS</span><strong>' + visibleGroups.length + ' units</strong></div><input class="bd-robot-search" type="search" placeholder="Search robot…" value="' + escapeHtml(baseDepthRobotFilter) + '" oninput="setBaseDepthRobotFilter(this.value)" aria-label="Search Base Depth robots"></header><div class="bd-cohort-filters"><button type="button" class="' + (baseDepthCohortFilter === 'all' ? 'active' : '') + '" onclick="setBaseDepthCohortFilter(\'all\')">All</button><button type="button" class="' + (baseDepthCohortFilter === 'DVT1' ? 'active' : '') + '" onclick="setBaseDepthCohortFilter(\'DVT1\')">DVT1</button><button type="button" class="' + (baseDepthCohortFilter === 'DVT2' ? 'active' : '') + '" onclick="setBaseDepthCohortFilter(\'DVT2\')">DVT2</button></div><div class="bd-status-filters" aria-label="Filter robots by status"><button type="button" class="' + (baseDepthStatusFilter === 'all' ? 'active' : '') + '" onclick="setBaseDepthStatusFilter(\'all\')">Any</button><button type="button" class="' + (baseDepthStatusFilter === 'pass' ? 'active' : '') + '" onclick="setBaseDepthStatusFilter(\'pass\')">Pass</button><button type="button" class="' + (baseDepthStatusFilter === 'fail' ? 'active' : '') + '" onclick="setBaseDepthStatusFilter(\'fail\')">Review</button><button type="button" class="' + (baseDepthStatusFilter === 'pending' ? 'active' : '') + '" onclick="setBaseDepthStatusFilter(\'pending\')">Pending</button></div><div class="base-depth-master-list">';
     visibleGroups.forEach(function(group) {
       var state = getBaseDepthGroupState(group, columns);
       var obstacleRows = getBaseDepthObstacleRows(group, columns);
@@ -344,7 +610,7 @@
       var dotStatus = function(size) { var rows = obstacleRows[size] || []; if (!rows.length) return 'empty'; return rows.some(function(item) { return getBaseDepthDisplayedStatus(item.row) === 'Fail'; }) ? 'fail' : (rows.every(function(item) { return getBaseDepthDisplayedStatus(item.row) === 'Pass'; }) ? 'pass' : 'pending'); };
       html += '<button type="button" class="bd-robot-item ' + (group.id === activeGroup.id ? 'active ' : '') + 'state-' + state.key + '" data-robot-id="' + escapeHtml(group.id) + '" onclick="selectBaseDepthRobot(this.dataset.robotId)"><div class="bd-item-main"><div class="bd-item-title-row"><span class="bd-cohort-pill ' + cohortClass + '">' + cohort + '</span><strong class="bd-robot-name">' + escapeHtml(group.id) + '</strong></div><div class="bd-item-sub"><span>' + group.rows.length + ' runs</span><div class="bd-obstacle-dots" title="Status across 3cm / 2.5cm / 2cm"><i class="dot ' + dotStatus('3cm') + '"></i><i class="dot ' + dotStatus('2.5cm') + '"></i><i class="dot ' + dotStatus('2cm') + '"></i></div></div></div><span class="bd-overall-badge ' + state.key + '">' + state.label + '</span></button>';
     });
-    html += '</div></aside><section class="base-depth-detail table-card base-depth-card"><header class="panel-header base-depth-hero module-unified-hero"><div class="hero-left"><div class="eyebrow">DATA EXPLORER</div><h1 class="module-panel-title hero-title">Base Depth Camera</h1><p class="module-purpose hero-purpose"><strong>PURPOSE</strong><span>To evaluate obstacle detection capability and distance measurement precision of the lower depth sensor across standard hurdle heights (3cm, 2.5cm, 2cm).</span></p></div><div class="base-depth-meta-pills hero-actions"><span class="meta-chip"><strong>Robot:</strong> <span id="bd_active_robot">' + escapeHtml(activeGroup.id) + '</span></span><span class="meta-chip"><strong>Projector:</strong> <span class="badge-pass">PASS</span></span><button type="button" class="btn-ctrl primary base-depth-fov-button" onclick="openBaseDepthFovModal()"><span aria-hidden="true">⌁</span> View FOV Plot</button><button type="button" class="btn-ctrl base-depth-export-button" onclick="exportBaseDepthFovFromMain()">Export FOV</button></div></header><header class="base-depth-detail-header"><div><span>ROBOT ID</span><h2>' + escapeHtml(activeGroup.id) + '</h2></div><dl><div><dt>Date</dt><dd>' + escapeHtml(date) + '</dd></div><div><dt>Tester</dt><dd>' + escapeHtml(tester) + '</dd></div><div><dt>SW Version</dt><dd>' + escapeHtml(sw) + '</dd></div></dl></header>';
+    html += '</div></aside><section class="base-depth-detail table-card base-depth-card"><header class="panel-header base-depth-hero module-unified-hero"><div class="hero-left"><div class="eyebrow">DATA EXPLORER</div><h1 class="module-panel-title hero-title">Base Depth Camera</h1><p class="module-purpose hero-purpose"><strong>PURPOSE</strong><span>Obstacle detection and distance precision across 3 cm, 2.5 cm, and 2 cm hurdles.</span></p></div><div class="base-depth-meta-pills hero-actions"><button type="button" class="btn-ctrl base-depth-guide-trigger" onclick="openBaseDepthPlacementDrawer(this)" aria-haspopup="dialog"><svg viewBox="0 0 18 18" aria-hidden="true"><path d="M3 14.5L14.5 3M5.5 3H15v9.5M3 8.5V15h6.5"/></svg><span>Placement Specs</span></button><button type="button" class="btn-ctrl primary base-depth-fov-button" onclick="openBaseDepthFovModal()"><span aria-hidden="true">⌁</span> Compare FOV</button></div></header><header class="base-depth-detail-header"><div><span>ROBOT ID</span><h2 id="bd_active_robot">' + escapeHtml(activeGroup.id) + '</h2></div><dl><div><dt>Date</dt><dd>' + escapeHtml(date) + '</dd></div><div><dt>Tester</dt><dd>' + escapeHtml(tester) + '</dd></div><div><dt>SW Version</dt><dd>' + escapeHtml(sw) + '</dd></div></dl></header>';
     html += '<div class="base-depth-detail-toolbar"><div class="base-depth-size-tabs" role="tablist"><button type="button" class="' + (activeBaseDepthObstacle === '3cm' ? 'active' : '') + '" onclick="selectBaseDepthObstacle(\'3cm\')">3cm <span>' + obstacleRows['3cm'].length + '</span></button><button type="button" class="' + (activeBaseDepthObstacle === '2.5cm' ? 'active' : '') + '" onclick="selectBaseDepthObstacle(\'2.5cm\')">2.5cm <span>' + obstacleRows['2.5cm'].length + '</span></button><button type="button" class="' + (activeBaseDepthObstacle === '2cm' ? 'active' : '') + '" onclick="selectBaseDepthObstacle(\'2cm\')">2cm <span>' + obstacleRows['2cm'].length + '</span></button></div><label class="base-depth-reference-toggle"><input type="checkbox" ' + (baseDepthShowReference ? 'checked ' : '') + 'onchange="toggleBaseDepthReferenceData(this.checked)"><span></span>Toggle Reference Data</label></div>';
     html += renderBaseDepthCleanGrid(selectedRows, response, columns) + '</section></section>';
     html = html.replace('<section class="base-depth-master-detail">', '<section class="base-depth-master-detail ' + (baseDepthSidebarCollapsed ? 'bd-sidebar-collapsed' : '') + '">');
@@ -368,6 +634,7 @@
       html = html.replace('</section></div></div>', '</section><aside class="base-depth-info-rail table-card"><div class="bd-rail-kicker">ACTIVE ROBOT</div><h3>' + escapeHtml(activeGroup.id) + '</h3><div class="bd-rail-meta"><div><span>Tester</span><strong>' + escapeHtml(tester) + '</strong></div><div><span>SW Version</span><strong>' + escapeHtml(sw) + '</strong></div><div><span>Date</span><strong>' + escapeHtml(date) + '</strong></div></div><div class="bd-rail-fov"><div><strong>FOV Plot</strong><button type="button" class="btn-ctrl primary" onclick="openBaseDepthFovModal()">View</button></div><canvas id="baseDepthMiniFov" width="280" height="180"></canvas></div></aside></div></div></div>');
     }
     container.innerHTML = html;
+    prewarmBaseDepthPlacementDrawer();
     setSyncState('Synced ' + response.updatedAt, 'ready');
   }
 
@@ -379,6 +646,8 @@
     if (!items.length) html += '<tr><td colspan="' + (baseDepthShowReference ? 7 + columns.reference.length : 6) + '" class="base-depth-empty">No ' + activeBaseDepthObstacle + ' measurements recorded.</td></tr>';
     items.forEach(function(item, index) {
       var row = item.row;
+      var sheetRow = (response.headerRow || 1) + 1 + (item.sourceIndex || 0);
+      var editing = baseDepthInlineEditSheetRow === sheetRow;
       var calculated = getBaseDepthRowStatus(row, columns);
       var displayedStatus = getBaseDepthDisplayedStatus(row);
       var point = columns.point >= 0 ? row[columns.point] : '';
@@ -386,11 +655,85 @@
       var y = columns.coordY >= 0 ? row[columns.coordY] : '';
       var combined = columns.coord >= 0 ? row[columns.coord] : '';
       var coordinate = combined || ((x || y) ? '(' + (x || '—') + ', ' + (y || '—') + ')' : '—');
-      html += '<tr><td class="col-point">' + escapeHtml(point || String(index + 1)) + '</td><td class="col-script-dist"><code>' + escapeHtml(row[columns.scriptDist] || '—') + '</code></td>' + (baseDepthShowReference ? '<td class="col-real-dist"><code>' + escapeHtml(row[columns.realDist] || '—') + '</code></td>' : '') + '<td class="col-distance-std"><code>' + escapeHtml(row[columns.distanceStd] || '—') + '</code></td><td class="base-depth-coordinate col-coord">' + escapeHtml(coordinate) + '</td><td><span class="status-badge-smart ' + displayedStatus.toLowerCase() + '">' + displayedStatus + '</span></td><td><button type="button" class="base-depth-edit-button" onclick="editBaseDepthRow(event,' + ((response.headerRow || 1) + 1 + (item.sourceIndex || 0)) + ')">Edit</button></td>';
+      var scriptCell = editing ? '<input class="bd-inline-editor" type="number" step="0.001" data-bd-inline="script" value="' + escapeHtml(row[columns.scriptDist] || '') + '">' : '<code>' + escapeHtml(row[columns.scriptDist] || '—') + '</code>';
+      var stdCell = editing ? '<input class="bd-inline-editor" type="number" step="0.001" data-bd-inline="std" value="' + escapeHtml(row[columns.distanceStd] || '') + '">' : '<code>' + escapeHtml(row[columns.distanceStd] || '—') + '</code>';
+      var coordCell = editing ? '<div class="bd-inline-coordinates"><input class="bd-inline-editor" type="number" step="0.001" data-bd-inline="x" aria-label="Coordinate X" value="' + escapeHtml(x || '') + '"><input class="bd-inline-editor" type="number" step="0.001" data-bd-inline="y" aria-label="Coordinate Y" value="' + escapeHtml(y || '') + '"></div>' : escapeHtml(coordinate);
+      var statusCell = editing ? '<select class="bd-inline-editor" data-bd-inline="status"><option value="">Pending</option><option value="Pass"' + (displayedStatus === 'Pass' ? ' selected' : '') + '>Pass</option><option value="Fail"' + (displayedStatus === 'Fail' ? ' selected' : '') + '>Fail</option></select>' : '<span class="status-badge-smart ' + displayedStatus.toLowerCase() + '">' + displayedStatus + '</span>';
+      html += '<tr' + (editing ? ' class="bd-inline-editing"' : '') + '><td class="col-point">' + escapeHtml(point || String(index + 1)) + '</td><td class="col-script-dist">' + scriptCell + '</td>' + (baseDepthShowReference ? '<td class="col-real-dist"><code>' + escapeHtml(row[columns.realDist] || '—') + '</code></td>' : '') + '<td class="col-distance-std">' + stdCell + '</td><td class="base-depth-coordinate col-coord">' + coordCell + '</td><td>' + statusCell + '</td><td class="bd-inline-actions">' + (editing ? '<button type="button" class="base-depth-edit-button" onclick="saveBaseDepthInlineEdit(event,' + sheetRow + ')">Save</button><button type="button" class="table-delete-button" onclick="cancelBaseDepthInlineEdit(event)">Cancel</button>' : renderBaseDepthRowActionMenu(sheetRow)) + '</td>';
       if (baseDepthShowReference) { html += '<td>' + (calculated.accuracy === null ? '—' : calculated.accuracy.toFixed(2) + '%') + '</td><td>' + (calculated.delta === null ? '—' : (calculated.delta >= 0 ? '+' : '') + calculated.delta.toFixed(3) + ' m') + '</td>'; columns.reference.forEach(function(column) { html += '<td>' + escapeHtml(row[column] || '—') + '</td>'; }); }
       html += '</tr>';
     });
     return html + '</tbody></table></div>';
+  }
+
+  function renderBaseDepthRowActionMenu(sheetRow) {
+    var menuId = 'menu_basedepth_row_' + sheetRow;
+    return '<div class="action-menu-wrapper generic-action-menu base-depth-row-menu"><button type="button" class="icon-btn-dots action-btn" data-menu-id="' + menuId + '" aria-label="Row actions" aria-haspopup="menu" aria-expanded="false">&#8942;</button><div class="dropdown-menu" id="' + menuId + '"><div class="dropdown-item" role="menuitem" onclick="startBaseDepthInlineEdit(event,' + sheetRow + ')">Edit</div><div class="dropdown-divider"></div><div class="dropdown-item danger" role="menuitem" onclick="deleteGenericRow(event,' + sheetRow + ',\'basedepth\')">Delete</div></div></div>';
+  }
+
+  function startBaseDepthInlineEdit(event, sheetRow) {
+    if (event) event.stopPropagation();
+    baseDepthInlineEditSheetRow = Number(sheetRow);
+    if (rawModuleResponse) renderBaseDepthMasterDetail(rawModuleResponse, groupModuleRowsByRobot(rawModuleResponse));
+  }
+
+  function cancelBaseDepthInlineEdit(event) {
+    if (event) event.stopPropagation();
+    baseDepthInlineEditSheetRow = null;
+    if (rawModuleResponse) renderBaseDepthMasterDetail(rawModuleResponse, groupModuleRowsByRobot(rawModuleResponse));
+  }
+
+  function saveBaseDepthInlineEdit(event, sheetRow) {
+    if (event) event.stopPropagation();
+    if (!rawModuleResponse) return;
+    var dataIndex = Number(sheetRow) - Number(rawModuleResponse.headerRow || 1) - 1;
+    var original = rawModuleResponse.rows[dataIndex];
+    if (!original) return handleFail('Could not find the selected Base Depth row.');
+    var columns = getBaseDepthColumns(rawModuleResponse);
+    var editor = function(field) { return document.querySelector('[data-bd-inline="' + field + '"]'); };
+    var script = editor('script');
+    var std = editor('std');
+    var coordX = editor('x');
+    var coordY = editor('y');
+    var status = editor('status');
+    var draft = original.slice();
+    var size = normalizeBaseDepthObstacle(original[columns.obstacle]) || activeBaseDepthObstacle;
+    var realDist = String(original[columns.realDist] || (baseDepthFixedRealDistances[size] || [])[parseInt(original[columns.point], 10) - 1] || '');
+    if (columns.scriptDist >= 0) draft[columns.scriptDist] = script ? script.value.trim() : original[columns.scriptDist];
+    if (columns.distanceStd >= 0) draft[columns.distanceStd] = std ? std.value.trim() : original[columns.distanceStd];
+    if (columns.coordX >= 0 && coordX) draft[columns.coordX] = coordX.value.trim();
+    if (columns.coordY >= 0 && coordY) draft[columns.coordY] = coordY.value.trim();
+    if (columns.coord >= 0 && (coordX || coordY)) draft[columns.coord] = (coordX ? coordX.value.trim() : '') + ', ' + (coordY ? coordY.value.trim() : '');
+    var result = calculateBaseDepthResult(draft[columns.scriptDist], realDist);
+    var selectedStatus = status ? status.value : '';
+    var finalStatus = selectedStatus || result.status;
+    if (columns.projector >= 0) draft[columns.projector] = finalStatus;
+    else if (columns.status >= 0) draft[columns.status] = finalStatus;
+    var changedColumns = {};
+    [columns.scriptDist, columns.distanceStd, columns.coordX, columns.coordY, columns.coord, columns.projector >= 0 ? columns.projector : columns.status].forEach(function(column) {
+      if (column >= 0 && String(draft[column] || '') !== String(original[column] || '')) changedColumns[column] = draft[column] || '';
+    });
+    var changes = Object.keys(changedColumns).map(function(column) { return { column:Number(column) + 1, value:changedColumns[column] }; });
+    if (!changes.length) { baseDepthInlineEditSheetRow = null; renderBaseDepthMasterDetail(rawModuleResponse, groupModuleRowsByRobot(rawModuleResponse)); return; }
+    var previous = cloneStaticIsoResponse(rawModuleResponse);
+    rawModuleResponse.rows[dataIndex] = draft;
+    baseDepthInlineEditSheetRow = null;
+    renderSmartModule(rawModuleResponse);
+    google.script.run.withSuccessHandler(function(response) {
+      if (!response || response.success === false) {
+        rawModuleResponse = previous;
+        baseDepthInlineEditSheetRow = Number(sheetRow);
+        renderSmartModule(rawModuleResponse);
+        handleFail(response && response.error ? response.error : 'Base Depth update failed.');
+        return;
+      }
+      localStorage.removeItem('iso_tab_cache_basedepth');
+    }).withFailureHandler(function(error) {
+      rawModuleResponse = previous;
+      baseDepthInlineEditSheetRow = Number(sheetRow);
+      renderSmartModule(rawModuleResponse);
+      handleFail(error);
+    }).updateIsoModuleCells({ sheetName:rawModuleResponse.sheetName, moduleKey:'basedepth', row:Number(sheetRow), changes:changes });
   }
 
   function baseDepthUniqueValues(column) {
@@ -404,7 +747,7 @@
   function renderBaseDepthEntryRows(size) {
     var html = '';
     for (var point = 1; point <= 6; point++) {
-      html += '<tr><th>' + point + '</th><td><input type="number" step="0.001" data-bd-field="script" data-size="' + size + '" data-point="' + point + '"></td><td><input type="number" step="0.01" data-bd-field="real" data-size="' + size + '" data-point="' + point + '"></td><td><input type="number" step="0.001" data-bd-field="std" data-size="' + size + '" data-point="' + point + '"></td><td><input type="number" step="0.001" data-bd-field="x" data-size="' + size + '" data-point="' + point + '"></td><td><input type="number" step="0.001" data-bd-field="y" data-size="' + size + '" data-point="' + point + '"></td><td><select data-bd-field="projector" data-size="' + size + '" data-point="' + point + '"><option value="">Select</option><option value="Pass">Pass</option><option value="Fail">Fail</option></select></td></tr>';
+      html += '<tr><th>' + point + '</th><td><input type="number" step="0.001" data-bd-field="script" data-size="' + size + '" data-point="' + point + '"></td><td><input type="number" step="0.001" data-bd-field="std" data-size="' + size + '" data-point="' + point + '"></td><td><input type="number" step="0.001" data-bd-field="x" data-size="' + size + '" data-point="' + point + '"></td><td><input type="number" step="0.001" data-bd-field="y" data-size="' + size + '" data-point="' + point + '"></td><td><select class="base-depth-projector-select" aria-label="Projector status, point ' + point + '" data-bd-field="projector" data-size="' + size + '" data-point="' + point + '" onchange="setBaseDepthProjectorState(this)"><option value="">—</option><option value="Pass">Pass</option><option value="Fail">Fail</option></select></td></tr>';
     }
     return html;
   }
@@ -421,6 +764,7 @@
     if (!rawModuleResponse) return;
     var columns = getBaseDepthColumns(rawModuleResponse);
     var groups = groupModuleRowsByRobot(rawModuleResponse);
+    baseDepthFixedRealDistances = buildBaseDepthFixedRealDistances(groups, columns);
     var robotValues = groups.map(function(group) { return group.id; });
     var lastRobot = localStorage.getItem('last_basedepth_robot') || activeBaseDepthRobotId || robotValues[0] || '';
     var lastTester = localStorage.getItem('last_basedepth_tester') || baseDepthUniqueValues(columns.tester)[0] || '';
@@ -428,18 +772,183 @@
     var now = new Date();
     var today = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
     var modal = ensureBaseDepthRecordModal();
-    modal.innerHTML = '<div class="base-depth-record-panel" role="dialog" aria-modal="true" aria-labelledby="baseDepthRecordTitle"><header><div><h3 id="baseDepthRecordTitle">Add Base Depth Record</h3><p>Enter raw measurements only. Accuracy, delta and status are calculated automatically.</p></div><button type="button" onclick="closeBaseDepthRecordModal()" aria-label="Close">×</button></header><form id="baseDepthRecordForm" onsubmit="submitBaseDepthRecord(event)"><div class="base-depth-entry-meta"><label><span>Robot ID</span><select id="bd_robot" required>' + baseDepthOptions(robotValues,lastRobot) + '</select></label><label><span>Date</span><input id="bd_date" value="' + today + '" required></label><label><span>Tester</span><input id="bd_tester" list="registeredTesterList" value="' + escapeHtml(lastTester) + '" required></label><label><span>SW Version</span><input id="bd_sw" list="baseDepthSwList" value="' + escapeHtml(lastSw) + '" required><datalist id="baseDepthSwList">' + baseDepthOptions(baseDepthUniqueValues(columns.sw),'') + '</datalist></label></div><div class="base-depth-paste-hint"><strong>Clipboard ready</strong><span>Paste six TSV/log rows while a 3cm or 2cm section is focused.</span></div>' +
-      '<details class="base-depth-entry-section" data-size="3cm" open ontoggle="if(this.open) baseDepthPasteObstacle=\'3cm\'"><summary><span>3cm obstacle</span><em>6 test points</em></summary><div class="base-depth-entry-grid"><table><thead><tr><th>#</th><th>Script Dist (m)</th><th>Real Dist (cm)</th><th>Distance STD</th><th>Coord X</th><th>Coord Y</th><th>Projector</th></tr></thead><tbody>' + renderBaseDepthEntryRows('3cm') + '</tbody></table></div></details>' +
-      '<details class="base-depth-entry-section" data-size="2.5cm" ontoggle="if(this.open) baseDepthPasteObstacle=\'2.5cm\'"><summary><span>2.5cm obstacle</span><em>6 test points</em></summary><div class="base-depth-entry-grid"><table><thead><tr><th>#</th><th>Script Dist (m)</th><th>Real Dist (cm)</th><th>Distance STD</th><th>Coord X</th><th>Coord Y</th><th>Projector</th></tr></thead><tbody>' + renderBaseDepthEntryRows('2.5cm') + '</tbody></table></div></details>' +
-      '<details class="base-depth-entry-section" data-size="2cm" ontoggle="if(this.open) baseDepthPasteObstacle=\'2cm\'"><summary><span>2cm obstacle</span><em>6 test points</em></summary><div class="base-depth-entry-grid"><table><thead><tr><th>#</th><th>Script Dist (m)</th><th>Real Dist (cm)</th><th>Distance STD</th><th>Coord X</th><th>Coord Y</th><th>Projector</th></tr></thead><tbody>' + renderBaseDepthEntryRows('2cm') + '</tbody></table></div></details><footer><span>18 rows will be appended to Google Sheets</span><button type="button" class="btn-ctrl" onclick="closeBaseDepthRecordModal()">Cancel</button><button type="submit" class="btn-action" id="baseDepthSaveButton">Save Record</button></footer></form></div>';
+    modal.innerHTML = '<div class="base-depth-record-panel" role="dialog" aria-modal="true" aria-labelledby="baseDepthRecordTitle"><header><div><h3 id="baseDepthRecordTitle">Add Base Depth Record</h3><p>Enter raw measurements only. Accuracy, delta and status are calculated automatically.</p></div><button type="button" onclick="closeBaseDepthRecordModal()" aria-label="Close">×</button></header><form id="baseDepthRecordForm" onsubmit="submitBaseDepthRecord(event)"><div class="base-depth-entry-meta"><label class="base-depth-choice-field"><span>Robot ID</span><div class="base-depth-choice"><input id="bd_robot" class="base-depth-choice-input" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="bdRobotChoices" onfocus="showBaseDepthChoices(\'robot\')" oninput="filterBaseDepthChoices(\'robot\',this.value)" onkeydown="navigateBaseDepthChoices(event,\'robot\')" onblur="canonicalizeBaseDepthChoice(\'robot\')" value="' + escapeHtml(lastRobot) + '" required><div id="bdRobotChoices" class="base-depth-choice-list" role="listbox" hidden></div></div></label><label><span>Date</span><input id="bd_date" value="' + today + '" required></label><label><span>Tester</span><input id="bd_tester" list="registeredTesterList" value="' + escapeHtml(lastTester) + '" required></label><label class="base-depth-choice-field"><span>SW Version</span><div class="base-depth-choice"><input id="bd_sw" class="base-depth-choice-input" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="bdSwChoices" onfocus="showBaseDepthChoices(\'sw\')" oninput="filterBaseDepthChoices(\'sw\',this.value)" onkeydown="navigateBaseDepthChoices(event,\'sw\')" onblur="canonicalizeBaseDepthChoice(\'sw\')" value="' + escapeHtml(lastSw) + '" required><div id="bdSwChoices" class="base-depth-choice-list" role="listbox" hidden></div></div></label></div><div class="base-depth-paste-hint"><strong>Clipboard ready</strong><span>Paste six TSV/log rows while a 3cm or 2cm section is focused.</span></div>' +
+      '<details class="base-depth-entry-section" data-size="3cm" open ontoggle="if(this.open) baseDepthPasteObstacle=\'3cm\'"><summary><span>3cm obstacle</span><em>6 test points</em></summary><div class="base-depth-entry-grid"><table><thead><tr><th>#</th><th>Script Dist (m)</th><th>Distance STD</th><th>Coord X</th><th>Coord Y</th><th>Projector</th></tr></thead><tbody>' + renderBaseDepthEntryRows('3cm') + '</tbody></table></div></details>' +
+      '<details class="base-depth-entry-section" data-size="2.5cm" ontoggle="if(this.open) baseDepthPasteObstacle=\'2.5cm\'"><summary><span>2.5cm obstacle</span><em>6 test points</em></summary><div class="base-depth-entry-grid"><table><thead><tr><th>#</th><th>Script Dist (m)</th><th>Distance STD</th><th>Coord X</th><th>Coord Y</th><th>Projector</th></tr></thead><tbody>' + renderBaseDepthEntryRows('2.5cm') + '</tbody></table></div></details>' +
+      '<details class="base-depth-entry-section" data-size="2cm" ontoggle="if(this.open) baseDepthPasteObstacle=\'2cm\'"><summary><span>2cm obstacle</span><em>6 test points</em></summary><div class="base-depth-entry-grid"><table><thead><tr><th>#</th><th>Script Dist (m)</th><th>Distance STD</th><th>Coord X</th><th>Coord Y</th><th>Projector</th></tr></thead><tbody>' + renderBaseDepthEntryRows('2cm') + '</tbody></table></div></details><footer><span>Real distance is set automatically by obstacle type; 18 rows will be appended</span><button type="button" class="btn-ctrl" onclick="closeBaseDepthRecordModal()">Cancel</button><button type="submit" class="btn-action" id="baseDepthSaveButton">Save Record</button></footer></form></div>';
     modal.querySelectorAll('.base-depth-entry-section').forEach(function(section) { section.addEventListener('focusin', function() { baseDepthPasteObstacle = section.dataset.size; }); });
     modal.style.display = 'flex';
+    loadRegisteredRobotNames(function() {
+      var robotInput = document.getElementById('bd_robot');
+      var swInput = document.getElementById('bd_sw');
+      if (robotInput) robotInput.value = baseDepthCanonicalChoice('robot', robotInput.value);
+      if (swInput) swInput.value = baseDepthCanonicalChoice('sw', swInput.value);
+    });
     var baseDepthDateInput = document.getElementById('bd_date');
-    if (baseDepthDateInput) {
-      baseDepthDateInput.type = 'date';
-      baseDepthDateInput.insertAdjacentHTML('afterend', '<button type="button" class="iso-date-picker-button" onclick="openIsoDatePicker(\'bd_date\')" aria-label="Open calendar">📅</button>');
-    }
+    if (baseDepthDateInput) baseDepthDateInput.type = 'date';
     prefillBaseDepthEntryFromExistingData(lastRobot, columns);
+  }
+
+  function normalizeBaseDepthRobotChoice(value) {
+    return String(value || '').trim().replace(/\s+/g, ' ').replace(/AC3110\s*-?\s*DVT/ig, 'AC3110 DVT').replace(/\bDVT(\d+)/ig, 'DVT$1');
+  }
+
+  function baseDepthChoiceKey(kind, value) {
+    var text = String(value || '').trim().replace(/\s+/g, ' ');
+    return kind === 'robot' ? text.toLowerCase().replace(/\s+/g, '') : text.toLowerCase();
+  }
+
+  function getBaseDepthChoiceValues(kind) {
+    var values = [];
+    try {
+      var stored = JSON.parse(localStorage.getItem(kind === 'robot' ? 'registered_robot_names' : 'registered_sw_versions') || '[]');
+      if (Array.isArray(stored)) values = values.concat(stored);
+    } catch (e) { /* use loaded values */ }
+    if (kind === 'sw' && Array.isArray(registeredSwVersionNames)) values = values.concat(registeredSwVersionNames);
+    var list = document.getElementById(kind === 'robot' ? 'registeredRobotList' : 'registeredSwVersionList');
+    if (list) Array.prototype.forEach.call(list.options, function(option) { values.push(option.value); });
+    var unique = {};
+    return values.map(function(value) {
+      var text = kind === 'robot' ? normalizeBaseDepthRobotChoice(value) : String(value || '').trim().replace(/\s+/g, ' ');
+      var key = baseDepthChoiceKey(kind, text);
+      if (!text || !key || unique[key]) return null;
+      unique[key] = true;
+      return text;
+    }).filter(Boolean).sort(function(a, b) { return a.localeCompare(b, undefined, {numeric:true, sensitivity:'base'}); });
+  }
+
+  function baseDepthCanonicalChoice(kind, value) {
+    var key = baseDepthChoiceKey(kind, value);
+    if (!key) return String(value || '');
+    var match = getBaseDepthChoiceValues(kind).filter(function(item) { return baseDepthChoiceKey(kind, item) === key; })[0];
+    return match || (kind === 'robot' ? normalizeBaseDepthRobotChoice(value) : String(value || '').trim().replace(/\s+/g, ' '));
+  }
+
+  function canonicalizeBaseDepthChoice(kind) {
+    var input = document.getElementById(kind === 'robot' ? 'bd_robot' : 'bd_sw');
+    if (input && input.value.trim()) input.value = baseDepthCanonicalChoice(kind, input.value);
+    setTimeout(function() { closeBaseDepthChoices(kind); }, 80);
+  }
+
+  function showBaseDepthChoices(kind, query) {
+    var input = document.getElementById(kind === 'robot' ? 'bd_robot' : 'bd_sw');
+    var list = document.getElementById(kind === 'robot' ? 'bdRobotChoices' : 'bdSwChoices');
+    if (!input || !list) return;
+    input.setAttribute('aria-expanded', 'true');
+    baseDepthChoiceActiveIndex[kind] = -1;
+    renderBaseDepthChoices(kind, query === undefined ? '' : query);
+    if (!baseDepthChoicePositionBound) {
+      window.addEventListener('resize', positionOpenBaseDepthChoices);
+      window.addEventListener('scroll', positionOpenBaseDepthChoices, true);
+      document.addEventListener('mousedown', closeBaseDepthChoicesOutside);
+      baseDepthChoicePositionBound = true;
+    }
+    positionBaseDepthChoice(kind);
+  }
+
+  function filterBaseDepthChoices(kind, query) {
+    renderBaseDepthChoices(kind, query || '');
+    positionBaseDepthChoice(kind);
+  }
+
+  function renderBaseDepthChoices(kind, query) {
+    var input = document.getElementById(kind === 'robot' ? 'bd_robot' : 'bd_sw');
+    var list = document.getElementById(kind === 'robot' ? 'bdRobotChoices' : 'bdSwChoices');
+    if (!input || !list) return;
+    var needle = String(query || '').trim().toLowerCase();
+    var options = getBaseDepthChoiceValues(kind).filter(function(value) { return !needle || value.toLowerCase().indexOf(needle) !== -1; });
+    baseDepthChoiceActiveIndex[kind] = -1;
+    list.innerHTML = options.length ? options.map(function(value) {
+      return '<button type="button" role="option" class="base-depth-choice-option" data-value="' + escapeHtml(value) + '" onmousedown="event.preventDefault()" onclick="chooseBaseDepthChoice(\'' + kind + '\',this.dataset.value)">' + escapeHtml(value) + '</button>';
+    }).join('') : '<div class="base-depth-choice-empty">No matching saved values</div>';
+    list.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
+  }
+
+  function positionBaseDepthChoice(kind) {
+    var input = document.getElementById(kind === 'robot' ? 'bd_robot' : 'bd_sw');
+    var list = document.getElementById(kind === 'robot' ? 'bdRobotChoices' : 'bdSwChoices');
+    if (!input || !list || list.hidden) return;
+    var rect = input.getBoundingClientRect();
+    var maxHeight = Math.min(260, Math.max(120, window.innerHeight - 24));
+    var below = window.innerHeight - rect.bottom - 8;
+    var above = rect.top - 8;
+    var placeAbove = below < Math.min(190, list.scrollHeight) && above > below;
+    var height = Math.min(maxHeight, placeAbove ? above : below);
+    list.style.position = 'fixed';
+    list.style.left = Math.max(8, rect.left) + 'px';
+    list.style.width = Math.min(rect.width, window.innerWidth - Math.max(8, rect.left) - 8) + 'px';
+    list.style.maxHeight = Math.max(100, height) + 'px';
+    list.style.top = (placeAbove ? Math.max(8, rect.top - Math.max(100, height) - 6) : rect.bottom + 6) + 'px';
+  }
+
+  function positionOpenBaseDepthChoices() {
+    if (document.getElementById('bdRobotChoices') && !document.getElementById('bdRobotChoices').hidden) positionBaseDepthChoice('robot');
+    if (document.getElementById('bdSwChoices') && !document.getElementById('bdSwChoices').hidden) positionBaseDepthChoice('sw');
+  }
+
+  function closeBaseDepthChoices(kind) {
+    var input = document.getElementById(kind === 'robot' ? 'bd_robot' : 'bd_sw');
+    var list = document.getElementById(kind === 'robot' ? 'bdRobotChoices' : 'bdSwChoices');
+    if (list) { list.hidden = true; list.style.cssText = ''; }
+    if (input) input.setAttribute('aria-expanded', 'false');
+  }
+
+  function closeBaseDepthChoicesOutside(event) {
+    ['robot', 'sw'].forEach(function(kind) {
+      var wrap = document.querySelector(kind === 'robot' ? '#bd_robot' : '#bd_sw');
+      var list = document.getElementById(kind === 'robot' ? 'bdRobotChoices' : 'bdSwChoices');
+      if (wrap && list && !wrap.parentElement.contains(event.target)) closeBaseDepthChoices(kind);
+    });
+  }
+
+  function chooseBaseDepthChoice(kind, value) {
+    var input = document.getElementById(kind === 'robot' ? 'bd_robot' : 'bd_sw');
+    if (!input) return;
+    input.value = value;
+    closeBaseDepthChoices(kind);
+    input.focus({preventScroll:true});
+  }
+
+  function navigateBaseDepthChoices(event, kind) {
+    var list = document.getElementById(kind === 'robot' ? 'bdRobotChoices' : 'bdSwChoices');
+    if (!list || list.hidden) return;
+    var options = list.querySelectorAll('.base-depth-choice-option');
+    if (event.key === 'Escape') { closeBaseDepthChoices(kind); return; }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      var step = event.key === 'ArrowDown' ? 1 : -1;
+      baseDepthChoiceActiveIndex[kind] = (baseDepthChoiceActiveIndex[kind] + step + options.length) % options.length;
+      Array.prototype.forEach.call(options, function(option, index) { option.classList.toggle('active', index === baseDepthChoiceActiveIndex[kind]); });
+      if (options[baseDepthChoiceActiveIndex[kind]]) options[baseDepthChoiceActiveIndex[kind]].scrollIntoView({block:'nearest'});
+    } else if (event.key === 'Enter' && baseDepthChoiceActiveIndex[kind] >= 0 && options[baseDepthChoiceActiveIndex[kind]]) {
+      event.preventDefault();
+      chooseBaseDepthChoice(kind, options[baseDepthChoiceActiveIndex[kind]].dataset.value);
+    }
+  }
+
+  function buildBaseDepthFixedRealDistances(groups, columns) {
+    var profile = { '3cm':['32','106','35.9','35.9','120','120'], '2.5cm':['','','','','',''], '2cm':['','','','','',''] };
+    var votes = { '3cm':Array.from({length:6}, function(){ return {}; }), '2.5cm':Array.from({length:6}, function(){ return {}; }), '2cm':Array.from({length:6}, function(){ return {}; }) };
+    (groups || []).forEach(function(group) {
+      var bySize = getBaseDepthObstacleRows(group, columns);
+      Object.keys(votes).forEach(function(size) {
+        (bySize[size] || []).slice(0,6).forEach(function(item, index) {
+          var value = baseDepthNumber(item.row[columns.realDist]);
+          if (value === null) return;
+          var key = String(Number(value.toFixed(3)));
+          votes[size][index][key] = (votes[size][index][key] || 0) + 1;
+        });
+      });
+    });
+    Object.keys(votes).forEach(function(size) {
+      votes[size].forEach(function(counts, index) {
+        var winner = '';
+        Object.keys(counts).forEach(function(value) { if (!winner || counts[value] > counts[winner]) winner = value; });
+        if (winner) profile[size][index] = winner;
+      });
+    });
+    return profile;
   }
 
   function prefillBaseDepthEntryFromExistingData(robotId, columns) {
@@ -450,10 +959,9 @@
     ['3cm', '2.5cm', '2cm'].forEach(function(size) {
       (obstacleRows[size] || []).slice(0, 6).forEach(function(item, index) {
         var point = index + 1;
-        var real = getBaseDepthEntryField(size, point, 'real');
         var projector = getBaseDepthEntryField(size, point, 'projector');
-        if (real && !real.value) real.value = String(item.row[columns.realDist] || '').trim();
         if (projector && !projector.value) projector.value = String(item.row[columns.projector || columns.status] || '').trim();
+        if (projector) setBaseDepthProjectorState(projector);
       });
     });
   }
@@ -461,8 +969,12 @@
   function closeBaseDepthRecordModal() { var modal = document.getElementById('baseDepthRecordModal'); if (modal) modal.style.display = 'none'; }
   function getBaseDepthEntryField(size, point, field) { return document.querySelector('[data-bd-field="' + field + '"][data-size="' + size + '"][data-point="' + point + '"]'); }
 
+  function setBaseDepthProjectorState(select) {
+    if (select) select.dataset.projectorState = String(select.value || '').toLowerCase();
+  }
+
   function updateBaseDepthEntryCalc(size, point) {
-    var result = calculateBaseDepthResult(getBaseDepthEntryField(size,point,'script').value, getBaseDepthEntryField(size,point,'real').value);
+    var result = calculateBaseDepthResult(getBaseDepthEntryField(size,point,'script').value, baseDepthFixedRealDistances[size][point - 1]);
     var accuracy = document.querySelector('[data-bd-calc="accuracy"][data-size="' + size + '"][data-point="' + point + '"]');
     var delta = document.querySelector('[data-bd-calc="delta"][data-size="' + size + '"][data-point="' + point + '"]');
     var status = document.querySelector('[data-bd-calc="status"][data-size="' + size + '"][data-point="' + point + '"]');
@@ -494,7 +1006,7 @@
     event.preventDefault();
     rows.forEach(function(row, index) {
       var point = index + 1;
-      ['script','real','x','y'].forEach(function(field) { var input = getBaseDepthEntryField(baseDepthPasteObstacle,point,field); if (input && row[field] !== '') input.value = row[field]; });
+      ['script','x','y'].forEach(function(field) { var input = getBaseDepthEntryField(baseDepthPasteObstacle,point,field); if (input && row[field] !== '') input.value = row[field]; });
       updateBaseDepthEntryCalc(baseDepthPasteObstacle, point);
     });
     var toast = document.getElementById('copyToast'); toast.innerHTML = '<span style="color:#34d399;font-weight:800;">✓</span><span>' + rows.length + ' rows mapped to ' + baseDepthPasteObstacle + '</span>'; toast.style.display = 'flex'; setTimeout(function(){toast.style.display='none';},1800);
@@ -502,14 +1014,68 @@
 
   function collectBaseDepthSection(size) {
     var rows = [];
-    for (var point=1; point<=6; point++) rows.push({ point:point, scriptDist:getBaseDepthEntryField(size,point,'script').value.trim(), realDist:getBaseDepthEntryField(size,point,'real').value.trim(), distanceStd:getBaseDepthEntryField(size,point,'std').value.trim(), coordX:getBaseDepthEntryField(size,point,'x').value.trim(), coordY:getBaseDepthEntryField(size,point,'y').value.trim(), projector:getBaseDepthEntryField(size,point,'projector').value });
+    for (var point=1; point<=6; point++) rows.push({ point:point, scriptDist:getBaseDepthEntryField(size,point,'script').value.trim(), realDist:String(baseDepthFixedRealDistances[size][point - 1] || ''), distanceStd:getBaseDepthEntryField(size,point,'std').value.trim(), coordX:getBaseDepthEntryField(size,point,'x').value.trim(), coordY:getBaseDepthEntryField(size,point,'y').value.trim(), projector:getBaseDepthEntryField(size,point,'projector').value });
     return rows;
+  }
+
+  function appendOptimisticBaseDepthRows(response, payload) {
+    var columns = getBaseDepthColumns(response);
+    var width = (response.headers || []).length;
+    ['3cm', '2.5cm', '2cm'].forEach(function(size) {
+      (payload.obstacles[size] || []).forEach(function(entry, index) {
+        var row = new Array(width).fill('');
+        var calculated = calculateBaseDepthResult(entry.scriptDist, entry.realDist);
+        if (index === 0 && size === '3cm') {
+          if (columns.robot >= 0) row[columns.robot] = payload.robotId;
+          if (columns.date >= 0) row[columns.date] = payload.date;
+          if (columns.sw >= 0) row[columns.sw] = payload.swVersion;
+          if (columns.tester >= 0) row[columns.tester] = payload.tester;
+        }
+        if (columns.obstacle >= 0) row[columns.obstacle] = size;
+        if (columns.point >= 0) row[columns.point] = index + 1;
+        if (columns.scriptDist >= 0) row[columns.scriptDist] = entry.scriptDist;
+        if (columns.realDist >= 0) row[columns.realDist] = entry.realDist;
+        if (columns.distanceStd >= 0) row[columns.distanceStd] = entry.distanceStd;
+        if (columns.coordX >= 0) row[columns.coordX] = entry.coordX;
+        if (columns.coordY >= 0) row[columns.coordY] = entry.coordY;
+        if (columns.coord >= 0 && (entry.coordX || entry.coordY)) row[columns.coord] = entry.coordX + ', ' + entry.coordY;
+        if (columns.accuracy >= 0 && calculated.accuracy !== null) row[columns.accuracy] = calculated.accuracy.toFixed(2) + '%';
+        if (columns.delta >= 0 && calculated.delta !== null) row[columns.delta] = calculated.delta.toFixed(3);
+        if (columns.projector >= 0) row[columns.projector] = entry.projector;
+        if (columns.status >= 0) row[columns.status] = entry.projector || calculated.status;
+        response.rows.push(row);
+      });
+    });
+  }
+
+  function restoreBaseDepthDraft(payload) {
+    openBaseDepthRecordModal();
+    var set = function(id, value) { var field = document.getElementById(id); if (field) field.value = value || ''; };
+    set('bd_robot', payload.robotId); set('bd_date', payload.date); set('bd_tester', payload.tester); set('bd_sw', payload.swVersion);
+    ['3cm', '2.5cm', '2cm'].forEach(function(size) {
+      (payload.obstacles[size] || []).forEach(function(entry, index) {
+        var point = index + 1;
+        var values = { script:entry.scriptDist, std:entry.distanceStd, x:entry.coordX, y:entry.coordY, projector:entry.projector };
+        Object.keys(values).forEach(function(field) {
+          var control = getBaseDepthEntryField(size, point, field);
+          if (control) control.value = values[field] || '';
+        });
+      });
+    });
   }
 
   function submitBaseDepthRecord(event) {
     event.preventDefault();
     var form = document.getElementById('baseDepthRecordForm');
     if (form.reportValidity && !form.reportValidity()) return;
+    var missingFixed = [];
+    ['3cm', '2.5cm', '2cm'].forEach(function(size) {
+      for (var point = 1; point <= 6; point++) if (!baseDepthFixedRealDistances[size][point - 1]) missingFixed.push(size + ' point ' + point);
+    });
+    if (missingFixed.length) {
+      handleFail('Fixed real-distance profile is missing for: ' + missingFixed.join(', ') + '. Add the reference values to the Base Depth sheet first.');
+      return;
+    }
     var payload = {
       sheetName: rawModuleResponse.sheetName,
       robotId: document.getElementById('bd_robot').value,
@@ -524,19 +1090,36 @@
     var button = document.getElementById('baseDepthSaveButton');
     button.disabled = true;
     button.innerText = 'Saving…';
+    var previousResponse = cloneStaticIsoResponse(rawModuleResponse);
+    var previousActiveRobotId = activeBaseDepthRobotId;
+    var previousActiveObstacle = activeBaseDepthObstacle;
+    rawModuleResponse.rows = rawModuleResponse.rows || [];
+    appendOptimisticBaseDepthRows(rawModuleResponse, payload);
+    activeBaseDepthRobotId = payload.robotId;
+    activeBaseDepthObstacle = '3cm';
+    closeBaseDepthRecordModal();
+    renderSmartModule(rawModuleResponse);
+
+    var rollback = function(error) {
+      rawModuleResponse = previousResponse;
+      activeBaseDepthRobotId = previousActiveRobotId;
+      activeBaseDepthObstacle = previousActiveObstacle;
+      renderSmartModule(rawModuleResponse);
+      restoreBaseDepthDraft(payload);
+      handleFail(error);
+    };
     google.script.run.withSuccessHandler(function(response) {
-      button.disabled = false;
-      button.innerText = 'Save Record';
       if (!response || !response.success) {
-        handleFail(response && response.error ? response.error : 'Base Depth save failed.');
+        rollback(response && response.error ? response.error : 'Base Depth save failed.');
         return;
       }
-      rawModuleResponse = response.data;
       activeBaseDepthRobotId = payload.robotId;
       activeBaseDepthObstacle = '3cm';
       saveTabCache('basedepth', { type:'module', data:response.data });
-      closeBaseDepthRecordModal();
-      renderSmartModule(response.data);
+      if (currentTab === 'basedepth') {
+        rawModuleResponse = response.data;
+        renderSmartModule(response.data);
+      }
       setTimeout(function() {
         document.querySelectorAll('.base-depth-master-item').forEach(function(item) {
           if (item.dataset.robotId !== payload.robotId) return;
@@ -545,9 +1128,7 @@
         });
       }, 30);
     }).withFailureHandler(function(error) {
-      button.disabled = false;
-      button.innerText = 'Save Record';
-      handleFail(error);
+      rollback(error);
     }).appendBaseDepthRecord(payload);
   }
 </script>

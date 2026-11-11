@@ -28,11 +28,11 @@ var ISO_MODULE_DEFINITIONS = {
 };
 
 /** Small registry wrapper keeps lookup logic out of the data reader. */
-function IsoModuleRegistry(definitions) {
+function IsoModuleRegistry_(definitions) {
   this.definitions = definitions || {};
 }
 
-IsoModuleRegistry.prototype.get = function(moduleKey) {
+IsoModuleRegistry_.prototype.get = function(moduleKey) {
   var groups = ['static', 'dynamic', 'accuracy'];
   for (var i = 0; i < groups.length; i++) {
     var config = this.definitions[groups[i]][moduleKey];
@@ -41,7 +41,7 @@ IsoModuleRegistry.prototype.get = function(moduleKey) {
   return null;
 };
 
-var ISO_MODULE_REGISTRY = new IsoModuleRegistry(ISO_MODULE_DEFINITIONS);
+var ISO_MODULE_REGISTRY = new IsoModuleRegistry_(ISO_MODULE_DEFINITIONS);
 
 function getIsoModuleConfig_(moduleKey) { return ISO_MODULE_REGISTRY.get(moduleKey); }
 

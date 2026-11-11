@@ -114,7 +114,7 @@ function getIsoCell_(displayValues, richValues, formulas, rawValues, r, c) {
 }
 
 /** Fetch one protected Sheets image only when its thumbnail is needed. */
-function getIsoImageData(payload) {
+function getIsoImageData_(payload) {
   try {
     payload = payload || {};
     var sheetName = String(payload.sheetName || '').trim();
@@ -122,11 +122,10 @@ function getIsoImageData(payload) {
     var column = Number(payload.column);
     if (!sheetName || !row || !column) return { success: false, error: 'Invalid image cell.' };
 
-    var sheet = SpreadsheetApp.openByUrl(DATABASE_URL).getSheetByName(sheetName);
+    var sheet = ISOApp.Server.Database.open().getSheetByName(sheetName);
     if (!sheet) return { success: false, error: 'Image sheet not found.' };
-    var imageCache = CacheService.getScriptCache();
     var imageCacheKey = 'iso_img_' + Utilities.base64EncodeWebSafe(sheetName + ':' + row + ':' + column).slice(0, 180);
-    var cachedImage = imageCache.get(imageCacheKey);
+    var cachedImage = ISOApp.Server.Cache.read(imageCacheKey);
     if (cachedImage) return { success:true, dataUrl:cachedImage };
     var cell = sheet.getRange(row, column);
     var raw = cell.getValue();
@@ -154,7 +153,7 @@ function getIsoImageData(payload) {
         var driveType = String(driveBlob.getContentType() || '').toLowerCase();
         if (driveType.indexOf('image/') === 0) {
           var driveData = 'data:' + driveType + ';base64,' + Utilities.base64Encode(driveBlob.getBytes());
-          if (driveData.length < 95000) imageCache.put(imageCacheKey, driveData, 21600);
+          if (driveData.length < 95000) ISOApp.Server.Cache.write(imageCacheKey, driveData, 21600);
           return { success: true, dataUrl: driveData };
         }
       } catch (driveError) { /* fall through to URL fetch variants */ }
@@ -172,7 +171,7 @@ function getIsoImageData(payload) {
       var contentType = String(blob.getContentType() || '').toLowerCase();
       if (contentType.indexOf('image/') !== 0) continue;
       var imageData = 'data:' + contentType + ';base64,' + Utilities.base64Encode(blob.getBytes());
-      if (imageData.length < 95000) imageCache.put(imageCacheKey, imageData, 21600);
+      if (imageData.length < 95000) ISOApp.Server.Cache.write(imageCacheKey, imageData, 21600);
       return { success: true, dataUrl: imageData };
     }
     return { success: false, error: 'Image access denied or returned a non-image response.' };
@@ -181,134 +180,9 @@ function getIsoImageData(payload) {
   }
 }
 
-/** Read image cells from the General/Specification information sheet. */
-function extractGeneralInfoImageAsBase64_(sheet, cellA1) {
-  try {
-    var range = sheet.getRange(cellA1);
-    var value = range.getValue();
-    var formula = range.getFormula();
-    var targetUrl = null;
-    if (formula && formula.toUpperCase().indexOf('=IMAGE') !== -1) {
-      var match = formula.match(/"([^"]+)"/);
-      if (match && match[1]) targetUrl = match[1];
-    } else if (typeof value === 'string' && value.indexOf('http') === 0) {
-      targetUrl = value;
-    } else if (value && typeof value === 'object' && typeof value.getContentUrl === 'function') {
-      targetUrl = value.getContentUrl();
-    }
-    if (targetUrl) {
-      var attempts = [{ muteHttpExceptions:true, followRedirects:true, headers:{ Authorization:'Bearer ' + ScriptApp.getOAuthToken() } }, { muteHttpExceptions:true, followRedirects:true }];
-      for (var attempt = 0; attempt < attempts.length; attempt++) {
-        var response = UrlFetchApp.fetch(targetUrl, attempts[attempt]);
-        if (response.getResponseCode() >= 200 && response.getResponseCode() < 300) {
-          var blob = response.getBlob();
-          if (String(blob.getContentType() || '').indexOf('image/') === 0) return 'data:' + blob.getContentType() + ';base64,' + Utilities.base64Encode(blob.getBytes());
-        }
-      }
-    }
-    if (typeof sheet.getImages === 'function') {
-      var targetRow = range.getRow(), targetCol = range.getColumn();
-      var images = sheet.getImages();
-      for (var i = 0; i < images.length; i++) {
-        var anchor = images[i].getAnchorCell();
-        if ((anchor.getRow() === targetRow || (anchor.getRow() >= targetRow - 1 && anchor.getRow() <= targetRow + 1)) && anchor.getColumn() === targetCol) {
-          var imageBlob = images[i].getBlob();
-          return 'data:' + (imageBlob.getContentType() || 'image/png') + ';base64,' + Utilities.base64Encode(imageBlob.getBytes());
-        }
-      }
-    }
-  } catch (error) {
-    console.error('Error extracting image from ' + cellA1 + ':', error);
-  }
-  return null;
-}
-
-function getGeneralInfoData() {
-  if (typeof getGeneralInfoDataV2 === 'function') return getGeneralInfoDataV2();
-  var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
-  var sheet = ss.getSheetByName('General info') || ss.getSheetByName('General Info');
-  if (!sheet) return { success:false, error:'General info sheet not found.' };
-  return {
-    success:true,
-    testStation:{ title:'Test Station Layout', imageBase64:extractGeneralInfoImageAsBase64_(sheet, 'B5'), note:sheet.getRange('C5').getDisplayValue() || 'Details arrangement as link' },
-    robotLu:{ title:'Robot LU Definition & Pose Dimensions', imageBase64:extractGeneralInfoImageAsBase64_(sheet, 'B6'), formula:'LU = ⌈w / 500⌉ × 500 mm', dimensions:sheet.getRange('C7').getDisplayValue() || '1.17 m x 0.56 m x 0.56 m (H x W x L)' }
-  };
-}
-
-function getGeneralInfoImages() {
-  if (typeof getGeneralInfoDataV2 === 'function') return getGeneralInfoDataV2();
-  try {
-    var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
-    var preferred = ['General Info', 'General Information', 'Specification', 'Factory Info', 'Environment'];
-    var sheet = null;
-    ss.getSheets().some(function(candidate) {
-      var name = normalizeIsoName_(candidate.getName());
-      if (preferred.some(function(alias) { return name === normalizeIsoName_(alias) || name.indexOf(normalizeIsoName_(alias)) !== -1; })) {
-        sheet = candidate;
-        return true;
-      }
-      return false;
-    });
-    if (!sheet) return { success: true, images: [] };
-
-    var range = sheet.getDataRange();
-    var display = range.getDisplayValues();
-    var rich = range.getRichTextValues();
-    var formulas = range.getFormulas();
-    var raw = range.getValues();
-    var images = [];
-
-    // Floating images inserted with Sheets' Insert Image feature do not appear
-    // in getDataRange(). Read them from the sheet image layer as well.
-    if (typeof sheet.getImages === 'function') {
-      sheet.getImages().forEach(function(floatingImage, imageIndex) {
-        try {
-          var anchor = floatingImage.getAnchorCell();
-          var blob = floatingImage.getBlob();
-          var imageBase64 = 'data:' + (blob.getContentType() || 'image/png') + ';base64,' + Utilities.base64Encode(blob.getBytes());
-          images.push({
-            value: imageBase64,
-            header: 'Reference image ' + (imageIndex + 1),
-            row: anchor.getRow(),
-            column: anchor.getColumn(),
-            sheetName: sheet.getName()
-          });
-        } catch (floatingImageError) { /* continue with cell images */ }
-      });
-    }
-
-    for (var r = 0; r < display.length; r++) {
-      var rowLabel = '';
-      for (var labelCol = 0; labelCol < Math.min(3, display[r].length); labelCol++) {
-        if (String(display[r][labelCol] || '').trim()) { rowLabel = String(display[r][labelCol]).trim(); break; }
-      }
-      for (var c = 0; c < display[r].length; c++) {
-        var value = getIsoCell_(display, rich, formulas, raw, r, c);
-        if (!/^https?:\/\//i.test(String(value || '')) && !/^data:image\//i.test(String(value || ''))) continue;
-        var imageResult = getIsoImageData({ sheetName: sheet.getName(), row: r + 1, column: c + 1 });
-        images.push({
-          value: imageResult && imageResult.success && imageResult.dataUrl ? imageResult.dataUrl : value,
-          header: rowLabel || ('Information image ' + (images.length + 1)),
-          row: r + 1,
-          column: c + 1,
-          sheetName: sheet.getName()
-        });
-      }
-    }
-    var station = images.filter(function(item) { return item.row >= 4 && item.row <= 5; })[0] || null;
-    var robotLu = images.filter(function(item) { return item.row >= 6 && item.row <= 7; })[0] || null;
-    var structured = getGeneralInfoData();
-    return {
-      success: true,
-      sheetName: sheet.getName(),
-      images: images,
-      testStation: structured.testStation.imageBase64 ? structured.testStation : { title:'Test Station Layout', category:'Factory Floor & Test Zones', imageBase64:station ? station.value : null, note:sheet.getRange('C5').getDisplayValue() || 'Details arrangement as link' },
-      robotLu: structured.robotLu.imageBase64 ? structured.robotLu : { title:'Robot LU Definition & Pose Dimensions', category:'Physical Robot Specifications', imageBase64:robotLu ? robotLu.value : null, formula:'LU = ⌈w / 500⌉ × 500 mm', dimensions:sheet.getRange('C7').getDisplayValue() || '1.17 m x 0.56 m x 0.56 m (H x W x L)' }
-    };
-  } catch (err) {
-    return { success: false, error: err.toString(), images: [] };
-  }
-}
+/** Compatibility delegates; GeneralInfo.js owns all General Info metadata. */
+function getGeneralInfoData_() { return ISOApp.Services.GeneralInfo.list(); }
+function getGeneralInfoImages_() { return ISOApp.Services.GeneralInfo.images(); }
 
 // -----------------------------------------------------------------------------
 // Column inference and row normalization
@@ -438,10 +312,10 @@ function summarizeIsoRows_(headers, rows, roles) {
 }
 
 // -----------------------------------------------------------------------------
-// Public module endpoints
+// Generic module service implementations (private by convention)
 // -----------------------------------------------------------------------------
 
-function getModuleData(moduleKey) {
+function getModuleData_(moduleKey) {
   try {
     var config = getIsoModuleConfig_(moduleKey);
     if (!config) return { success: false, error: 'Unknown ISO module.' };
@@ -449,14 +323,11 @@ function getModuleData(moduleKey) {
     // Module tabs are read-only between refreshes most of the time. A short
     // cache prevents repeated navigation/search actions from re-reading a
     // large Google Sheet on every click while keeping the UI effectively live.
-    var cache = CacheService.getScriptCache();
     var cacheKey = 'iso_module_' + String(moduleKey).replace(/[^a-z0-9_]/gi, '_');
-    var cached = cache.get(cacheKey);
-    if (cached) {
-      try { return JSON.parse(cached); } catch (cacheError) { /* rebuild below */ }
-    }
+    var cached = ISOApp.Server.Cache.readJson(cacheKey);
+    if (cached) return cached;
 
-    var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
+    var ss = ISOApp.Server.Database.open();
     var sheet = findIsoModuleSheet_(ss, config);
     if (!sheet) {
       return {
@@ -574,91 +445,108 @@ function getModuleData(moduleKey) {
     };
     // Applies to every generic module: Base Depth, IR Cliff, Head Depth,
     // Dynamic ISO modules, and Accuracy & Repeatability modules.
-    try { cache.put(cacheKey, JSON.stringify(result), 60); } catch (cacheWriteError) { /* cache is optional */ }
-    return result;
+    return ISOApp.Server.Cache.writeJson(cacheKey, result, 60);
   } catch (err) {
     return { success: false, error: err.toString() };
   }
 }
 
 /** Update one cell from a module table. Used by the compact Base Depth editor. */
-function updateIsoModuleCell(payload) {
+function updateIsoModuleCell_(payload) {
   try {
     payload = payload || {};
     var sheetName = String(payload.sheetName || '').trim();
     var row = Number(payload.row);
     var column = Number(payload.column);
-    if (!sheetName || !row || !column || row < 1 || column < 1) return { success: false, error: 'Invalid cell address.' };
-    var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
-    var sheet = ss.getSheetByName(sheetName);
-    if (!sheet) return { success: false, error: 'Sheet tab not found.' };
+    if (!sheetName || !row || !column || row < 1 || column < 1) return ISOApp.Server.Result.fail('Invalid cell address.');
+    var ss = ISOApp.Server.Database.open();
+    var sheet = ISOApp.Server.Database.requireSheet(ss, [sheetName], sheetName);
     sheet.getRange(row, column).setValue(payload.value === undefined ? '' : String(payload.value));
-    try { CacheService.getScriptCache().remove('iso_module_basedepth'); } catch (cacheError) { /* optional */ }
-    return { success: true, row: row, column: column };
+    ISOApp.Server.Cache.remove('iso_module_basedepth');
+    ISOApp.Server.Cache.remove('iso_static_input_choices');
+    return ISOApp.Server.Result.ok({ row: row, column: column });
   } catch (err) {
-    return { success: false, error: err.toString() };
+    return ISOApp.Server.Result.fail(err, 'Static ISO cell could not be updated.');
   }
 }
 
 /** Update only fields changed in the professional row editor. */
-function updateIsoModuleCells(payload) {
+function updateIsoModuleCells_(payload) {
   try {
     payload = payload || {};
     var sheetName = String(payload.sheetName || '').trim();
     var row = Number(payload.row);
     var changes = Array.isArray(payload.changes) ? payload.changes : [];
-    if (!sheetName || !row || row < 1 || !changes.length) return { success: false, error: 'No valid changes supplied.' };
-    var sheet = SpreadsheetApp.openByUrl(DATABASE_URL).getSheetByName(sheetName);
-    if (!sheet) return { success: false, error: 'Sheet tab not found.' };
+    if (!sheetName || !row || row < 1 || !changes.length) return ISOApp.Server.Result.fail('No valid changes supplied.');
+    var spreadsheet = ISOApp.Server.Database.open();
+    var sheet = ISOApp.Server.Database.requireSheet(spreadsheet, [sheetName], sheetName);
     changes.forEach(function(change) {
       var column = Number(change.column);
       if (column >= 1 && column <= sheet.getMaxColumns()) sheet.getRange(row, column).setValue(change.value === undefined ? '' : String(change.value));
     });
-    try {
-      var cacheKey = 'iso_module_' + String(payload.moduleKey || '').replace(/[^a-z0-9_]/gi, '_');
-      if (payload.moduleKey) CacheService.getScriptCache().remove(cacheKey);
-    } catch (cacheError) { /* optional */ }
-    return { success: true, count: changes.length };
+    if (payload.moduleKey) ISOApp.Server.Cache.remove('iso_module_' + String(payload.moduleKey).replace(/[^a-z0-9_]/gi, '_'));
+    ISOApp.Server.Cache.remove('iso_static_input_choices');
+    return ISOApp.Server.Result.ok({ count: changes.length });
   } catch (err) {
-    return { success: false, error: err.toString() };
+    return ISOApp.Server.Result.fail(err, 'Static ISO row could not be updated.');
   }
 }
 
 /** Append a new record using the discovered module header order. */
-function appendIsoModuleRecord(payload) {
+function appendIsoModuleRecord_(payload) {
   try {
     payload = payload || {};
     var sheetName = String(payload.sheetName || '').trim();
     var values = Array.isArray(payload.values) ? payload.values : [];
-    if (!sheetName || !values.length) return { success: false, error: 'No module values supplied.' };
-    var ss = SpreadsheetApp.openByUrl(DATABASE_URL);
-    var sheet = ss.getSheetByName(sheetName);
-    if (!sheet) return { success: false, error: 'Sheet tab not found.' };
-    sheet.getRange(sheet.getLastRow() + 1, 1, 1, values.length).setValues([values.map(function(value) { return value === undefined ? '' : String(value); })]);
-    try {
-      var cacheKey = 'iso_module_' + String(payload.moduleKey || '').replace(/[^a-z0-9_]/gi, '_');
-      if (payload.moduleKey) CacheService.getScriptCache().remove(cacheKey);
-    } catch (cacheError) { /* optional */ }
-    return { success: true };
+    if (!sheetName || !values.length) return ISOApp.Server.Result.fail('No module values supplied.');
+    var ss = ISOApp.Server.Database.open();
+    var sheet = ISOApp.Server.Database.requireSheet(ss, [sheetName], sheetName);
+    sheet.getRange(sheet.getLastRow() + 1, 1, 1, values.length).setValues([ISOApp.Server.Rows.strings(values)]);
+    if (payload.moduleKey) ISOApp.Server.Cache.remove('iso_module_' + String(payload.moduleKey).replace(/[^a-z0-9_]/gi, '_'));
+    ISOApp.Server.Cache.remove('iso_static_input_choices');
+    return ISOApp.Server.Result.ok();
   } catch (err) {
-    return { success: false, error: err.toString() };
+    return ISOApp.Server.Result.fail(err, 'Static ISO record could not be appended.');
   }
 }
 
 /** Delete one normalized module record by its original Google Sheets row. */
-function deleteIsoModuleRecord(payload) {
+function deleteIsoModuleRecord_(payload) {
   try {
     payload = payload || {};
     var sheetRow = Number(payload.sheetRow);
     var moduleKey = String(payload.moduleKey || '').trim();
     var config = getIsoModuleConfig_(moduleKey);
-    if (!config || !sheetRow || sheetRow < 1) return { success: false, error: 'Invalid module record.' };
-    var sheet = findIsoModuleSheet_(SpreadsheetApp.openByUrl(DATABASE_URL), config);
-    if (!sheet) return { success: false, error: 'Module sheet not found.' };
+    if (!config || !sheetRow || sheetRow < 1) return ISOApp.Server.Result.fail('Invalid module record.');
+    var sheet = findIsoModuleSheet_(ISOApp.Server.Database.open(), config);
+    if (!sheet) return ISOApp.Server.Result.fail('Module sheet not found.');
     sheet.deleteRow(sheetRow);
-    CacheService.getScriptCache().remove('iso_module_' + moduleKey.replace(/[^a-z0-9_]/gi, '_'));
-    return { success: true };
+    ISOApp.Server.Cache.remove('iso_module_' + moduleKey.replace(/[^a-z0-9_]/gi, '_'));
+    ISOApp.Server.Cache.remove('iso_static_input_choices');
+    return ISOApp.Server.Result.ok();
   } catch (err) {
-    return { success: false, error: err.toString() };
+    return ISOApp.Server.Result.fail(err, 'Static ISO record could not be deleted.');
   }
 }
+
+ISOApp.Services = ISOApp.Services || {};
+ISOApp.Services.Modules = Object.freeze({
+  image:getIsoImageData_,
+  generalInfo:getGeneralInfoData_,
+  generalInfoImages:getGeneralInfoImages_,
+  list:getModuleData_,
+  updateCell:updateIsoModuleCell_,
+  updateCells:updateIsoModuleCells_,
+  append:appendIsoModuleRecord_,
+  remove:deleteIsoModuleRecord_
+});
+
+// Public RPC adapters.
+function getIsoImageData(payload) { return ISOApp.Services.Modules.image(payload); }
+function getGeneralInfoData() { return ISOApp.Services.Modules.generalInfo(); }
+function getGeneralInfoImages() { return ISOApp.Services.Modules.generalInfoImages(); }
+function getModuleData(moduleKey) { return ISOApp.Services.Modules.list(moduleKey); }
+function updateIsoModuleCell(payload) { return ISOApp.Services.Modules.updateCell(payload); }
+function updateIsoModuleCells(payload) { return ISOApp.Services.Modules.updateCells(payload); }
+function appendIsoModuleRecord(payload) { return ISOApp.Services.Modules.append(payload); }
+function deleteIsoModuleRecord(payload) { return ISOApp.Services.Modules.remove(payload); }

@@ -1,0 +1,82 @@
+/* General Info image/data worker. This file is injected as text and executed
+ * inside a dedicated Worker, never on the dashboard's main UI thread. */
+(function() {
+  var CACHE_NAME = 'iso-general-info-images-v1';
+  var TIMEOUT_MS = 8000;
+  var MAX_RETRIES = 2;
+
+  function sleep(ms) { return new Promise(function(resolve) { setTimeout(resolve, ms); }); }
+
+  function fetchWithRetry(url) {
+    var attempt = 0;
+    function run() {
+      var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      var timer = controller ? setTimeout(function() { controller.abort(); }, TIMEOUT_MS) : null;
+      return fetch(url, { mode:'cors', credentials:'omit', signal:controller ? controller.signal : undefined })
+        .then(function(response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          return response;
+        })
+        .catch(function(error) {
+          if (attempt++ >= MAX_RETRIES) throw error;
+          return sleep(250 * Math.pow(2, attempt - 1)).then(run);
+        })
+        .finally(function() { if (timer) clearTimeout(timer); });
+    }
+    return run();
+  }
+
+  function cacheImage(url) {
+    if (!self.caches) return fetchWithRetry(url).then(function(response) { return response.blob(); });
+    return caches.open(CACHE_NAME).then(function(cache) {
+      return cache.match(url).then(function(cached) {
+        if (cached) {
+          // Cache-first response is returned immediately. Revalidation runs in
+          // the background so the next visit receives a fresh local copy.
+          fetchWithRetry(url).then(function(response) { cache.put(url, response.clone()); }).catch(function() {});
+          return cached.blob();
+        }
+        return fetchWithRetry(url).then(function(response) {
+          return cache.put(url, response.clone()).catch(function() {}).then(function() { return response.blob(); });
+        });
+      });
+    });
+  }
+
+  function cacheImageData(dataUrl, cacheKey) {
+    var key = cacheKey || ('https://general-info.local/' + Date.now());
+    if (!self.caches) return fetch(dataUrl).then(function(response) { return response.blob(); });
+    return caches.open(CACHE_NAME).then(function(cache) {
+      return cache.match(key).then(function(cached) {
+        if (cached) return cached.blob();
+        return fetch(dataUrl).then(function(response) { return response.blob(); }).then(function(blob) {
+          return cache.put(key, new Response(blob)).catch(function() {}).then(function() { return blob; });
+        });
+      });
+    });
+  }
+
+  self.onmessage = function(event) {
+    var message = event.data || {};
+    if (!message.id || (!message.url && !message.dataUrl)) return;
+    if (message.type === 'json') {
+      fetchWithRetry(message.url).then(function(response) { return response.text(); }).then(function(text) {
+        self.postMessage({ id:message.id, type:'json', value:JSON.parse(text) });
+      }).catch(function(error) { self.postMessage({ id:message.id, error:String(error && error.message || error) }); });
+      return;
+    }
+    if (message.type === 'imageData') {
+      cacheImageData(message.dataUrl, message.cacheKey).then(function(blob) {
+        self.postMessage({ id:message.id, type:'image', blob:blob });
+      }).catch(function(error) {
+        self.postMessage({ id:message.id, error:String(error && error.message || error) });
+      });
+      return;
+    }
+    cacheImage(message.url).then(function(blob) {
+      self.postMessage({ id:message.id, type:'image', blob:blob });
+    }).catch(function(error) {
+      self.postMessage({ id:message.id, error:String(error && error.message || error) });
+    });
+  };
+})();

@@ -1,5 +1,6 @@
 <script>
   function renderWifiModal() {
+    loadRegisteredRobotNames();
     document.getElementById('modalTitle').innerText = 'Add Record';
     document.getElementById('formBody').innerHTML = 
       '<div class="form-group"><label>Robot ID</label><input type="text" id="w_robot" list="registeredRobotList" onfocus="hydrateRegisteredRobotList()" placeholder="e.g. AC3110DVT1-6" required></div>' +
@@ -30,6 +31,8 @@
   }
 
   function submitWifiForm() {
+    var wasEditing = isEditing;
+    var editIndex = activeEditRowIndex;
     var payload = {
       rowIndex: activeEditRowIndex,
       robotId: isEditing ? (rawWifiResponse.rows[activeEditRowIndex][1] || '') : document.getElementById('w_robot').value,
@@ -40,10 +43,43 @@
       leftLink: document.getElementById('w_left_link').value
     };
 
-    if (isEditing) { 
-      google.script.run.withSuccessHandler(handleSuccess).withFailureHandler(handleFail).updateWifiRecord(payload); 
+    var previousResponse = cloneStaticIsoResponse(rawWifiResponse);
+    var optimisticRow;
+    if (wasEditing) {
+      optimisticRow = rawWifiResponse.rows[editIndex] || [];
+    } else {
+      optimisticRow = new Array(Math.max(14, (rawWifiResponse.headers || []).length)).fill('');
+      optimisticRow[0] = String((rawWifiResponse.rows || []).length + 1);
+      optimisticRow[1] = payload.robotId;
+      rawWifiResponse.rows.push(optimisticRow);
+    }
+    optimisticRow[2] = payload.tester;
+    optimisticRow[3] = payload.rightAntenna;
+    optimisticRow[7] = payload.rightLink;
+    optimisticRow[9] = payload.leftAntenna;
+    optimisticRow[13] = payload.leftLink;
+    closeInputModal();
+    renderTable(rawWifiResponse);
+
+    var restoreDraft = function(error) {
+      rawWifiResponse = previousResponse;
+      renderTable(rawWifiResponse);
+      if (wasEditing) openEditModal(editIndex);
+      else openInputModal();
+      var set = function(id, value) { var field = document.getElementById(id); if (field) field.value = value || ''; };
+      set('w_robot', payload.robotId); set('w_tester', payload.tester); set('w_right', payload.rightAntenna);
+      set('w_right_link', payload.rightLink); set('w_left', payload.leftAntenna); set('w_left_link', payload.leftLink);
+      handleFail(error);
+    };
+    var saved = function(response) {
+      if (!response || response.success === false) restoreDraft(response && response.error ? response.error : 'Wi-Fi save failed.');
+      else localStorage.removeItem('iso_tab_cache_wifi');
+    };
+
+    if (wasEditing) {
+      google.script.run.withSuccessHandler(saved).withFailureHandler(restoreDraft).updateWifiRecord(payload);
     } else { 
-      google.script.run.withSuccessHandler(handleSuccess).withFailureHandler(handleFail).addWifiRecord(payload); 
+      google.script.run.withSuccessHandler(saved).withFailureHandler(restoreDraft).addWifiRecord(payload);
     }
   }
 </script>

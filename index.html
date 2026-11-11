@@ -7,6 +7,11 @@
 </head>
 <body>
 
+  <script>
+    // The deployed Apps Script URL used by client-side POST requests.
+    window.ISO_WEB_APP_URL = <?!= JSON.stringify(ScriptApp.getService().getUrl()) ?>;
+  </script>
+
   <button class="mobile-menu-btn" onclick="document.body.classList.toggle('mobile-nav-open')" aria-label="Toggle navigation">☰</button>
   <div class="sidebar-scrim" onclick="document.body.classList.remove('mobile-nav-open')"></div>
 
@@ -223,7 +228,9 @@
 
   <div class="toast" id="copyToast"></div>
   <datalist id="registeredRobotList"></datalist>
+  <datalist id="registeredSwVersionList"></datalist>
   <datalist id="registeredTesterList"></datalist>
+  <template id="baseDepthPlacementGuideTemplate"><?!= include('client/modules/static/BaseDepth_Reference'); ?></template>
 
   <?!= include('client/modules/static/BaseDepth_JS'); ?>
   <?!= include('client/modules/static/HeadDepth_JS'); ?>
@@ -239,6 +246,7 @@
   <?!= include('client/modules/dynamic/AprilTag_JS'); ?>
   <?!= include('client/Modules_UI'); ?>
   <?!= include('client/App_JS'); ?>
+  <script id="generalInfoImageWorkerSource" type="text/plain"><?!= include('client/GeneralInfo_ImageWorker'); ?></script>
   <?!= include('client/GeneralInfo_JS'); ?>
   <?!= include('client/Overview_JS'); ?>
 

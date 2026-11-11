@@ -7,7 +7,7 @@ function normalizeBaseDepthObstacle_(value) {
   return text ? text + 'cm' : 'Unknown';
 }
 
-function getBaseDepthData() {
+function getBaseDepthData_() {
   var result = getModuleData('basedepth');
   if (!result || !Array.isArray(result.rows)) return result;
   var headers = result.headers || [];
@@ -84,7 +84,7 @@ function calculateBaseDepthResult_(scriptDistance, realDistanceCm) {
   return { delta: delta, accuracy: accuracy, status: Math.abs(delta) <= BASE_DEPTH_TOLERANCE_M_ + 1e-9 ? 'Pass' : 'Fail' };
 }
 
-function appendBaseDepthRecord(payload) {
+function appendBaseDepthRecord_(payload) {
   try {
     payload = payload || {};
     var sheetName = String(payload.sheetName || '').trim();
@@ -122,7 +122,7 @@ function appendBaseDepthRecord(payload) {
       });
     });
 
-    var sheet = SpreadsheetApp.openByUrl(DATABASE_URL).getSheetByName(sheetName);
+    var sheet = ISOApp.Server.Database.open().getSheetByName(sheetName);
     if (!sheet) return { success:false, error:'Base Depth sheet not found.' };
     var displayValues = sheet.getDataRange().getDisplayValues();
     var headerIndex = detectIsoHeaderRow_(displayValues);
@@ -137,7 +137,7 @@ function appendBaseDepthRecord(payload) {
     sheet.insertRowsAfter(lastRow, normalizedRows.length);
     var firstRow = lastRow + 1;
     var output = normalizedRows.map(function(entry) {
-      var row = new Array(width).fill('');
+      var row = ISOApp.Server.Rows.blank(width);
       var calculated = calculateBaseDepthResult_(entry.scriptDist, entry.realDist);
       if (columns.obstacle >= 0) row[columns.obstacle] = entry.size;
       if (columns.point >= 0) row[columns.point] = entry.point;
@@ -173,9 +173,17 @@ function appendBaseDepthRecord(payload) {
       }
     });
     sheet.getRange(firstRow, 1, output.length, width).setVerticalAlignment('middle');
-    CacheService.getScriptCache().remove('iso_module_basedepth');
-    return { success:true, firstRow:firstRow, rowsAdded:output.length, data:getBaseDepthData() };
+    ISOApp.Server.Cache.remove('iso_module_basedepth');
+    ISOApp.Server.Cache.remove('iso_static_input_choices');
+    return { success:true, firstRow:firstRow, rowsAdded:output.length, data:getBaseDepthData_() };
   } catch (err) {
     return { success:false, error:err.toString() };
   }
 }
+
+ISOApp.Services = ISOApp.Services || {};
+ISOApp.Services.BaseDepth = Object.freeze({ list:getBaseDepthData_, append:appendBaseDepthRecord_ });
+
+// Public RPC adapters.
+function getBaseDepthData() { return ISOApp.Services.BaseDepth.list(); }
+function appendBaseDepthRecord(payload) { return ISOApp.Services.BaseDepth.append(payload); }
