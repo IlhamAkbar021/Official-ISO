@@ -64,11 +64,13 @@ function getBaseDepthColumnMap_(headers) {
     point: findBaseDepthColumn_(headers, [/test.*point/, /^point/, /^run\b/, /^trial\b/, /sequence/, /^#$/], 6),
     scriptDist: findBaseDepthColumn_(headers, [/script.*dist/, /command.*dist/, /program.*dist/, /set.*dist/, /detect.*distance.*script/], 6),
     realDist: findBaseDepthColumn_(headers, [/real.*dist.*sensor/, /real.*dist/, /actual.*dist/, /measured.*dist/], 9),
+    distanceStd: findBaseDepthColumn_(headers, [/distance.*std/, /dist.*std/, /standard.*deviation/, /std\b/], -1),
     coordX: findBaseDepthColumn_(headers, [/coord.*\bx\b/, /\bx\b.*coord/, /position.*\bx\b/], 15),
     coordY: findBaseDepthColumn_(headers, [/coord.*\by\b/, /\by\b.*coord/, /position.*\by\b/], 16),
     coord: findBaseDepthColumn_(headers, [/coordinate/, /^coord$/], -1),
     accuracy: findBaseDepthColumn_(headers, [/accuracy/, /percent/, /rate/], 10),
     delta: findBaseDepthColumn_(headers, [/delta/, /difference/, /\bdiff\b/, /error/], 11),
+    projector: findBaseDepthColumn_(headers, [/projector/, /project.*result/], -1),
     status: findBaseDepthColumn_(headers, [/overall.*result/, /status/, /result/, /pass.*fail/], 13)
   };
 }
@@ -104,12 +106,18 @@ function appendBaseDepthRecord(payload) {
           point:index + 1,
           scriptDist:String(row.scriptDist || '').trim().replace(',', '.'),
           realDist:String(row.realDist || '').trim().replace(',', '.'),
+          distanceStd:String(row.distanceStd || '').trim().replace(',', '.'),
           coordX:String(row.coordX || '').trim().replace(',', '.'),
-          coordY:String(row.coordY || '').trim().replace(',', '.')
+          coordY:String(row.coordY || '').trim().replace(',', '.'),
+          projector:String(row.projector || '').trim()
         };
-        if (![entry.scriptDist, entry.realDist, entry.coordX, entry.coordY].every(function(value) { return value !== '' && isFinite(Number(value)); })) {
-          throw new Error(size + ' point ' + (index + 1) + ' contains incomplete or invalid raw values.');
-        }
+        // Partial records are valid: preserve the row structure and let the
+        // calculation return Pending until all raw fields are supplied.
+        [entry.scriptDist, entry.realDist, entry.distanceStd, entry.coordX, entry.coordY].forEach(function(value, fieldIndex) {
+          if (value !== '' && !isFinite(Number(value))) {
+            throw new Error(size + ' point ' + (index + 1) + ' contains an invalid raw value in field ' + (fieldIndex + 1) + '.');
+          }
+        });
         normalizedRows.push(entry);
       });
     });
@@ -135,12 +143,14 @@ function appendBaseDepthRecord(payload) {
       if (columns.point >= 0) row[columns.point] = entry.point;
       row[columns.scriptDist] = entry.scriptDist;
       row[columns.realDist] = entry.realDist;
-      if (columns.coord >= 0) row[columns.coord] = entry.coordX + ', ' + entry.coordY;
+      if (columns.distanceStd >= 0) row[columns.distanceStd] = entry.distanceStd;
+      if (columns.coord >= 0 && (entry.coordX !== '' || entry.coordY !== '')) row[columns.coord] = entry.coordX + ', ' + entry.coordY;
       if (columns.coordX >= 0) row[columns.coordX] = entry.coordX;
       if (columns.coordY >= 0) row[columns.coordY] = entry.coordY;
       if (columns.accuracy >= 0 && calculated) row[columns.accuracy] = calculated.accuracy === null ? '' : calculated.accuracy.toFixed(2) + '%';
       if (columns.delta >= 0 && calculated) row[columns.delta] = calculated.delta.toFixed(3);
-      if (columns.status >= 0 && calculated) row[columns.status] = calculated.status;
+      if (columns.projector >= 0 && entry.projector) row[columns.projector] = entry.projector;
+      if (columns.status >= 0 && entry.projector) row[columns.status] = entry.projector;
       return row;
     });
     sheet.getRange(firstRow, 1, output.length, width).setValues(output);

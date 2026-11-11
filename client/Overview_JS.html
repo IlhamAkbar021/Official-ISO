@@ -225,11 +225,17 @@
       var match = String(robot.name || '').toLowerCase().match(/dvt\s*[-_]?\s*(\d+)/);
       if (match) found['dvt' + match[1]] = Number(match[1]);
     });
+    var customLabels = typeof getRobotFilterLabels === 'function' ? getRobotFilterLabels() : {};
+    Object.keys(customLabels).forEach(function(key, index) {
+      if ((robots || []).some(function(robot) { return String(robot.name || '').toLowerCase().indexOf(key.toLowerCase()) !== -1; })) found[key] = 100 + index;
+    });
     return Object.keys(found).sort(function(a, b) { return found[a] - found[b]; });
   }
 
   function getDvtCohortLabel(cohortKey) {
     var number = String(cohortKey).replace(/^dvt/i, '');
+    var customLabels = typeof getRobotFilterLabels === 'function' ? getRobotFilterLabels() : {};
+    if (customLabels[cohortKey]) return customLabels[cohortKey];
     if (cohortKey === 'dvt1') return getDvt1Label();
     if (cohortKey === 'dvt2') return getDvt2Label();
     return 'AC3110-DVT' + number;
@@ -395,7 +401,10 @@
     if (activeDvtFilter !== 'all' && availableDvtCohorts.indexOf(activeDvtFilter) === -1) activeDvtFilter = 'all';
     var filteredRobots = response.robots.filter(function(r) {
       if (activeDvtFilter === 'all') return true;
-      var cohortMatch = String(r.name || '').toLowerCase().match(/dvt\s*[-_]?\s*(\d+)/);
+      var robotName = String(r.name || '').toLowerCase();
+      var customLabels = typeof getRobotFilterLabels === 'function' ? getRobotFilterLabels() : {};
+      if (customLabels[activeDvtFilter]) return robotName.indexOf(activeDvtFilter.toLowerCase()) !== -1;
+      var cohortMatch = robotName.match(/dvt\s*[-_]?\s*(\d+)/);
       return cohortMatch && ('dvt' + cohortMatch[1]) === activeDvtFilter;
     });
 

@@ -46,7 +46,7 @@
       pass_rate: "Pass rate",
       fail_rate: "Fail rate",
       sw_release: "SW release",
-      temperature: "Environment"
+      temperature: "Environment", settings_title: "⚙️ System Settings", settings_language: "Display Language", settings_matrix: "Custom Matrix Section Title", settings_filters: "Robot Filter Labels", settings_filter_help: "One label per line using key = label. Add as many labels as needed.", settings_testers: "Registered Tester Names", cancel: "Cancel", save_settings: "Save Settings"
     },
     zh: {
       app_title: "AC3110 測試管理",
@@ -74,15 +74,16 @@
       pass_rate: "通過率",
       fail_rate: "失敗率",
       sw_release: "軟體版本",
-      temperature: "環境"
+      temperature: "環境", settings_title: "⚙️ 系統設定", settings_language: "顯示語言", settings_matrix: "自訂矩陣區段標題", settings_filters: "機器人篩選標籤", settings_filter_help: "每行一個，格式為 key = 標籤，可新增任意數量。", settings_testers: "已登錄測試人員", cancel: "取消", save_settings: "儲存設定"
     }
   };
 
   function t(key) { return (I18N[currentLang] && I18N[currentLang][key]) ? I18N[currentLang][key] : key; }
   
   function getMatrixTitle() { return localStorage.getItem('custom_matrix_title') || 'Master Test Execution Matrix'; }
-  function getDvt1Label() { return localStorage.getItem('custom_dvt1_label') || 'AC3110-DVT1'; }
-  function getDvt2Label() { return localStorage.getItem('custom_dvt2_label') || 'AC3110-DVT2'; }
+  function getRobotFilterLabels() { try { return JSON.parse(localStorage.getItem('custom_robot_filter_labels') || '{}'); } catch (e) { return {}; } }
+  function getDvt1Label() { return getRobotFilterLabels().dvt1 || 'AC3110-DVT1'; }
+  function getDvt2Label() { return getRobotFilterLabels().dvt2 || 'AC3110-DVT2'; }
 
   function toggleNavGroup(groupId, headerEl) {
     var group = document.getElementById(groupId);
@@ -257,16 +258,20 @@
         var addBtn = document.getElementById('addRecordBtn');
         var searchInput = document.getElementById('tableSearchInput');
         if (addBtn) {
-          addBtn.style.display = (tabId === 'wifi' || tabId === 'lidar' || isGenericModule(tabId)) ? 'inline-flex' : 'none';
-          addBtn.innerText = tabId === 'lidar' ? '+ Add LiDAR Record' : '+ Add Record';
-          addBtn.setAttribute('onclick', tabId === 'lidar' ? 'openLidarSmartPasteModal()' : (tabId === 'basedepth' ? 'openBaseDepthRecordModal()' : (tabId === 'headdepth' ? 'openHeadDepthRecordModal()' : 'openInputModal()')));
+          if (tabId === 'lidar' && typeof configureLidarAddButton === 'function') {
+            configureLidarAddButton(addBtn);
+          } else {
+            addBtn.style.display = (tabId === 'wifi' || isGenericModule(tabId)) ? 'inline-flex' : 'none';
+            addBtn.innerText = '+ Add Record';
+            addBtn.setAttribute('onclick', tabId === 'basedepth' ? 'openBaseDepthRecordModal()' : (tabId === 'headdepth' ? 'openHeadDepthRecordModal()' : 'openInputModal()'));
+          }
         }
         if (searchInput) searchInput.style.display = 'block';
       }
     }
 
     renderSubPills();
-    loadCurrentTab();
+    loadCurrentTab(true);
   }
 
   function renderSubPills() {
@@ -352,13 +357,16 @@
     document.getElementById('nav_txt_dynamic').innerText = t('nav_dynamic');
     document.getElementById('nav_txt_accuracy').innerText = t('nav_accuracy');
     document.getElementById('btn_txt_settings').innerText = t('settings');
+    var settingText = { settings_title:'settings_title', settings_language_label:'settings_language', settings_matrix_label:'settings_matrix', settings_filter_label:'settings_filters', settings_testers_label:'settings_testers', settings_cancel:'cancel', settings_save:'save_settings' };
+    Object.keys(settingText).forEach(function(id) { var element = document.getElementById(id); if (element) element.innerText = t(settingText[id]); });
+    var filterHelp = document.getElementById('settings_filter_help'); if (filterHelp) filterHelp.innerText = t('settings_filter_help');
 
     var searchEl = document.getElementById('tableSearchInput');
     if(searchEl) searchEl.placeholder = t('search_placeholder');
     var refEl = document.getElementById('refreshBtnText');
     if(refEl) refEl.innerText = t('refresh');
     var addEl = document.getElementById('addRecordBtn');
-    if(addEl) addEl.innerText = currentTab === 'lidar' ? '+ Add LiDAR Record' : t('add_record');
+    if(addEl) addEl.innerText = t('add_record');
   }
 
   function confirmRefresh() {
@@ -366,7 +374,11 @@
     var text = document.getElementById('refreshBtnText');
     btn.disabled = true;
     text.innerText = 'Syncing…';
-    loadCurrentTab();
+    google.script.run.withSuccessHandler(function() {
+      loadCurrentTab(true);
+    }).withFailureHandler(function() {
+      loadCurrentTab(true);
+    }).clearStaticIsoCache();
     setTimeout(function() { btn.disabled = false; text.innerText = t('refresh'); }, 900);
   }
 
@@ -521,7 +533,7 @@
     return '<details class="dashboard-module-card"><summary><span class="dashboard-module-title"><b>' + escapeHtml(item.module.title) + '</b><small>' + escapeHtml(data.sheetName || data.title || item.module.group) + '</small></span><span class="dashboard-module-status">' + escapeHtml(status) + '</span></summary><div class="dashboard-module-body"><div class="dashboard-mini-stats"><span>Pass <b>' + (summary.pass || 0) + '</b></span><span>Fail <b>' + (summary.fail || 0) + '</b></span><span>Review <b>' + (summary.warning || 0) + '</b></span></div>' + table + '<button class="btn-ctrl dashboard-open-button" onclick="switchTab(\'' + item.module.key + '\')">Open full module</button></div></details>';
   }
 
-  function loadCurrentTab() {
+  function loadCurrentTab(forceRefresh) {
     var container = document.getElementById('tableContainer');
     var requestId = ++loadRequestId;
     setSyncState('Reading Google Sheets', 'loading');
@@ -545,7 +557,12 @@
 
     // Render the last successful response immediately. The server request
     // below still refreshes it, but navigation never has to wait for Sheets.
+    if (currentTab === 'basedepth' && localStorage.getItem('basedepth_cache_v2') !== '1') {
+      localStorage.removeItem('iso_tab_cache_basedepth');
+      localStorage.setItem('basedepth_cache_v2', '1');
+    }
     var cachedTab = localStorage.getItem('iso_tab_cache_' + currentTab);
+    if (!cachedTab && currentTab === 'headdepth') cachedTab = localStorage.getItem('cache_head_depth');
     var hasCachedTab = false;
     if (cachedTab) {
       try { renderCachedTab(JSON.parse(cachedTab)); hasCachedTab = true; } catch (cacheError) { }
@@ -566,6 +583,9 @@
           if (requestId !== loadRequestId) return;
           rawModuleResponse = response;
           saveTabCache(currentTab, { type: 'module', data: response });
+          if (currentTab === 'headdepth') {
+            try { localStorage.setItem('cache_head_depth', JSON.stringify({ type:'module', data:response })); } catch (cacheError) {}
+          }
           renderSmartModule(response);
         })
         .withFailureHandler(function(error) {
@@ -599,7 +619,7 @@
     } else if (currentTab === 'wifi') {
       google.script.run.withSuccessHandler(function(r){ if(requestId===loadRequestId){ setSyncState('Live data ready','ready'); saveTabCache('wifi', { type:'wifi', data:r }); renderTable(r); }}).withFailureHandler(showError).getWifiData();
     } else if (currentTab === 'lidar') {
-      google.script.run.withSuccessHandler(function(r){ if(requestId===loadRequestId){ setSyncState('Live data ready','ready'); saveTabCache('lidar', { type:'lidar', data:r }); renderSplitLidarTable(r); }}).withFailureHandler(showError).getLidarData();
+      google.script.run.withSuccessHandler(function(r){ if(requestId===loadRequestId){ setSyncState('Live data ready','ready'); saveTabCache('lidar', { type:'lidar', data:r }); renderSplitLidarTable(r); }}).withFailureHandler(showError).getLidarData(!!forceRefresh);
     }
   }
 
@@ -614,7 +634,7 @@
 
   function saveTabCache(tabId, value) {
     try {
-      if (value && value.data && value.type === 'module') {
+      if (value && value.data && value.type === 'module' && tabId !== 'basedepth') {
         var data = value.data;
         value.data = Object.assign({}, data, { rows: (data.rows || []).slice(0, 20) });
       }
@@ -1557,7 +1577,7 @@
       return !searchQuery || item.robotId.toLowerCase().indexOf(searchQuery) !== -1 || item.tester.toLowerCase().indexOf(searchQuery) !== -1;
     });
     var recordCount = isAccuracy ? visibleAccuracy.length : tiltRows.length;
-    var html = '<div class="lidar-inspection-page"><div class="panel-card smart-table-card lidar-card lidar-panel lidar-inspection-card">' +
+    var html = '<div class="lidar-inspection-page"><div class="panel-card smart-table-card lidar-card lidar-panel lidar-inspection-card ' + (isAccuracy ? 'lidar-accuracy-view' : 'lidar-tilt-expanded') + '">' +
       '<div class="module-unified-hero"><div class="hero-left"><span class="eyebrow">DATA EXPLORER</span><h1 class="hero-title">' + (isAccuracy ? 'LiDAR Accuracy Inspection' : 'LiDAR Tilt &amp; Angle Inspection') + '</h1><p class="hero-purpose"><strong>PURPOSE</strong><span>' + escapeHtml(getModulePurpose('lidar')) + '</span></p></div><div class="hero-actions"><span class="hero-badge-count">' + recordCount + ' units</span></div></div>' + renderLidarKpiStrip(summary) + '<div class="table-scroller lidar-table-scroll">';
 
     if (isAccuracy) {
@@ -1569,7 +1589,7 @@
           html += '<tr data-robot-id="' + escapeHtml(item.robotId) + '" data-record-date="' + escapeHtml(item.date) + '" data-source-index="' + item.startRowIndex + '"><td class="lidar-robot-id" title="' + escapeHtml(item.robotId) + '">' + escapeHtml(item.robotId) + '</td>' +
             '<td>' + renderLidarReleaseCell(item.swVer, item.date) + '</td><td>' + escapeHtml(item.tester) + '</td>' +
             '<td>' + renderLidarAccuracyMeasurement(item.runA, 5) + '</td><td>' + renderLidarAccuracyMeasurement(item.runB, 10) + '</td><td>' + renderLidarAccuracyMeasurement(item.runC, 15) + '</td>' +
-            '<td>' + renderActionDropdown('lidar_acc', item.startRowIndex) + '</td></tr>';
+            '<td>' + renderActionDropdown('lidar_acc', item.startRowIndex, item.robotId, item.date) + '</td></tr>';
         });
       }
       html += '</tbody></table>';
@@ -1580,8 +1600,8 @@
       } else {
         tiltRows.forEach(function(item) {
           var row = item.row || [];
-          html += '<tr data-robot-id="' + escapeHtml(row[0] || '') + '" data-record-date="' + escapeHtml(row[1] || '') + '"><td class="lidar-robot-id" title="' + escapeHtml(row[0] || '') + '">' + escapeHtml(row[0] || '—') + '</td>' +
-            '<td>' + renderLidarReleaseCell(row[2], row[1]) + '</td><td>' + escapeHtml(row[3] || '—') + '</td><td>' + escapeHtml(row[4] || '—') + '</td><td class="lidar-mono">' + renderLidarUnitValue(row[5], 'm') + '</td><td>' + renderLidarUnitValue(row[6], 'cm') + '</td><td>' + renderLidarUnitValue(row[7], 'cm') + '</td><td>' + renderLidarTiltStatus(row[8]) + '</td><td>' + renderLidarAngleRange(row[9], row[10]) + '</td><td>' + renderLidarEvidenceCell(row[11]) + '</td><td>' + renderActionDropdown('lidar_tilt', item.originalIndex) + '</td></tr>';
+          html += '<tr data-source-index="' + item.originalIndex + '" data-robot-id="' + escapeHtml(row[0] || '') + '" data-record-date="' + escapeHtml(row[1] || '') + '"><td class="lidar-robot-id" title="' + escapeHtml(row[0] || '') + '">' + escapeHtml(row[0] || '—') + '</td>' +
+            '<td>' + renderLidarReleaseCell(row[2], row[1]) + '</td><td>' + escapeHtml(row[3] || '—') + '</td><td>' + escapeHtml(row[4] || '—') + '</td><td class="lidar-mono">' + renderLidarUnitValue(row[5], 'm') + '</td><td>' + renderLidarUnitValue(row[6], 'cm') + '</td><td>' + renderLidarUnitValue(row[7], 'cm') + '</td><td>' + renderLidarTiltStatus(row[8]) + '</td><td>' + renderLidarAngleRange(row[9], row[10]) + '</td><td>' + renderLidarEvidenceCell(row[11]) + '</td><td>' + renderActionDropdown('lidar_tilt', item.originalIndex, row[0], row[1]) + '</td></tr>';
         });
       }
       html += '</tbody></table>';
@@ -1751,16 +1771,45 @@
     return html;
   }
 
-  function renderActionDropdown(type, index) {
+  function startLidarInlineEdit(type, index) {
+    var tableRow = document.querySelector('.lidar-inspection-table tr[data-source-index="' + index + '"]');
+    if (!tableRow) tableRow = document.querySelector('.lidar-inspection-table tr[data-robot-id]');
+    if (!tableRow) return;
+    document.querySelectorAll('.lidar-inline-edit-row').forEach(function(row) { row.classList.remove('lidar-inline-edit-row'); });
+    tableRow.classList.add('lidar-inline-edit-row');
+    var data = type === 'lidar_acc' ? (rawLidarResponse.accuracy.rows[index] || []) : (rawLidarResponse.tilt.rows[index] || []);
+    var input = function(id, value, kind) { return '<input class="lidar-inline-input" id="' + id + '" type="' + (kind || 'text') + '" value="' + escapeHtml(value || '') + '">'; };
+    if (type === 'lidar_acc') {
+      var r2 = rawLidarResponse.accuracy.rows[index + 1] || [], r3 = rawLidarResponse.accuracy.rows[index + 2] || [];
+      tableRow.innerHTML = '<td>' + input('li_robot', data[0]) + '</td><td>' + input('li_date', data[1], 'date') + '<br>' + input('li_sw', data[2]) + '</td><td>' + input('li_tester', data[3]) + '</td><td>' + input('li_d5', data[5], 'number') + '</td><td>' + input('li_d10', r2[5], 'number') + '</td><td>' + input('li_d15', r3[5], 'number') + '</td><td><button class="btn-action" onclick="saveLidarInlineEdit(\'lidar_acc\',' + index + ')">Save</button><button class="btn-ctrl" onclick="loadCurrentTab()">Cancel</button></td>';
+    } else {
+      tableRow.innerHTML = '<td>' + input('li_robot', data[0]) + '</td><td>' + input('li_date', data[1], 'date') + '<br>' + input('li_sw', data[2]) + '</td><td>' + input('li_tester', data[3]) + '</td><td>' + input('li_bricks', data[4], 'number') + '</td><td>' + input('li_detected', data[5], 'number') + '</td><td colspan="5">' + input('li_note', data[11]) + ' <button class="btn-action" onclick="saveLidarInlineEdit(\'lidar_tilt\',' + index + ')">Save</button><button class="btn-ctrl" onclick="loadCurrentTab()">Cancel</button></td>';
+    }
+  }
+
+  function saveLidarInlineEdit(type, index) {
+    var value = function(id) { var el = document.getElementById(id); return el ? el.value : ''; };
+    var payload = { rowIndex:index, lidarType:type === 'lidar_tilt' ? 'tilt' : 'accuracy', robotId:value('li_robot'), date:value('li_date'), swVer:value('li_sw'), tester:value('li_tester') };
+    if (payload.lidarType === 'accuracy') {
+      payload.runA = { distance:value('li_d5') };
+      payload.runB = { distance:value('li_d10') };
+      payload.runC = { distance:value('li_d15') };
+    } else {
+      payload.bricks=value('li_bricks'); payload.detectedDist=value('li_detected'); payload.note=value('li_note');
+    }
+    google.script.run.withSuccessHandler(function(){ loadCurrentTab(true); }).withFailureHandler(function(error){ alert('Update failed: ' + (error && error.message ? error.message : error)); }).updateLidarRecord(payload);
+  }
+
+  function renderActionDropdown(type, index, robotId, recordDate) {
     var menuId = type + '_' + index;
-    var editAction = type === 'wifi' ? 'openEditModal(' + index + ')' : (type === 'lidar_acc' ? 'openLidarAccuracyEditModal(' + index + ')' : 'openLidarTiltEditModal(' + index + ')');
+    var editAction = type === 'wifi' ? 'openEditModal(' + index + ')' : 'startLidarInlineEdit(\'' + type + '\',' + index + ')';
     return '<div class="action-menu-wrapper">' +
       '<button class="icon-btn-dots" onclick="toggleActionMenu(event, \'' + menuId + '\')">&#8942;</button>' +
       '<div class="dropdown-menu" id="menu_' + menuId + '">' +
         '<div class="dropdown-item" onclick="' + editAction + '">Edit</div>' +
         '<div class="dropdown-item" onclick="copyRowData(\'' + type + '\', ' + index + ')">Copy</div>' +
         '<div class="dropdown-divider"></div>' +
-        '<div class="dropdown-item danger" onclick="deleteFromDropdown(\'' + type + '\', ' + index + ')">' + t('delete_record') + '</div>' +
+        '<div class="dropdown-item danger" onclick="deleteFromDropdown(\'' + type + '\', ' + index + ', \'' + escapeHtml(robotId || '') + '\', \'' + escapeHtml(recordDate || '') + '\')">' + t('delete_record') + '</div>' +
       '</div></div>';
   }
 
@@ -1801,7 +1850,7 @@
     document.querySelectorAll('.dropdown-menu').forEach(function(m) { m.classList.remove('show'); });
   });
 
-  function deleteFromDropdown(type, index) {
+  function deleteFromDropdown(type, index, robotId, recordDate) {
     document.querySelectorAll('.dropdown-menu').forEach(function(m) { m.classList.remove('show'); });
     var moduleKey = type === 'wifi' ? 'Wi-Fi' : (type === 'lidar_acc' ? 'LiDAR Accuracy' : 'LiDAR Tilt');
     openDeleteConfirm(moduleKey, index, function() {
@@ -1809,7 +1858,7 @@
       toast.innerHTML = '<div class="spinner" style="width:16px;height:16px;border-top-color:#ffffff;"></div> <span style="margin-left:4px;">Deleting...</span>';
       toast.style.display = 'flex';
       if (type === 'wifi') google.script.run.withSuccessHandler(function(){ toast.style.display='none'; loadCurrentTab(); }).deleteWifiRecord({ rowIndex: index });
-      else google.script.run.withSuccessHandler(function(){ toast.style.display='none'; loadCurrentTab(); }).deleteLidarRecord({ rowIndex: index, lidarType: (type === 'lidar_acc' ? 'accuracy' : 'tilt') });
+      else google.script.run.withSuccessHandler(function(){ toast.style.display='none'; loadCurrentTab(true); }).withFailureHandler(function(error){ toast.style.display='none'; alert('Delete failed: ' + (error && error.message ? error.message : error)); }).deleteLidarRecord({ rowIndex: index, robotId: robotId, date: recordDate, lidarType: (type === 'lidar_acc' ? 'accuracy' : 'tilt') });
     });
   }
 
@@ -1934,7 +1983,8 @@
         var customHandler = index === robotColumn ? ' onchange="toggleCustomRobotInput(this)"' : '';
         html += '<td><select class="inline-record-field" data-column="' + index + '"' + customHandler + '><option value="">Select…</option>' + options.map(function(option) { return '<option value="' + escapeHtml(option) + '">' + escapeHtml(option) + '</option>'; }).join('') + customRobotOption + '</select>' + (index === robotColumn ? '<input class="custom-robot-input" type="text" placeholder="Type Robot ID" data-custom-robot-for="' + index + '">' : '') + '</td>';
       } else {
-        html += '<td><input class="inline-record-field" data-column="' + index + '" type="text" placeholder="' + escapeHtml(getFriendlyModuleHeader(header, index, rawModuleResponse.key)) + '"></td>';
+        var inlineDate = /date/i.test(String(header || ''));
+        html += '<td><input class="inline-record-field" data-column="' + index + '" type="' + (inlineDate ? 'date' : 'text') + '" placeholder="' + escapeHtml(getFriendlyModuleHeader(header, index, rawModuleResponse.key)) + (inlineDate ? '><button type="button" class="iso-date-picker-button inline-date-picker" onclick="openIsoDatePicker(this.previousElementSibling)">📅</button>' : '></td>') + (inlineDate ? '</td>' : '');
       }
     });
     html += '<td class="module-action-cell"><button type="button" class="inline-save-button" onclick="saveInlineGenericRecord()">Save</button><button type="button" class="inline-cancel-button" onclick="cancelInlineGenericRecord()">Cancel</button></td></tr>';
@@ -2057,7 +2107,9 @@
       }
       var robotList = index === robotColumn ? ' list="registeredRobotList" onfocus="hydrateRegisteredRobotList()"' : '';
       var testerList = index === testerColumn ? ' list="registeredTesterList" onfocus="hydrateRegisteredTesterList()"' : '';
-      return '<div class="form-group"><label>' + escapeHtml(label) + '</label><input type="text" name="module_field_' + index + '" value="' + escapeHtml(value) + '" placeholder="Enter ' + escapeHtml(label) + '"' + required + robotList + testerList + '></div>';
+      var dateField = /date/i.test(String(header || ''));
+      var dateValue = dateField ? value.replace(/\//g, '-') : value;
+      return '<div class="form-group"><label>' + escapeHtml(label) + '</label><input type="' + (dateField ? 'date' : 'text') + '" name="module_field_' + index + '" value="' + escapeHtml(dateValue) + '" placeholder="Enter ' + escapeHtml(label) + '"' + required + robotList + testerList + '>' + (dateField ? '<button type="button" class="iso-date-picker-button inline-date-picker" onclick="openIsoDatePicker(this.previousElementSibling)">📅</button>' : '') + '</div>';
     }).join('') + '</div>';
   }
 
@@ -2149,8 +2201,10 @@
 
   function openSettingsModal() {
     document.getElementById('setting_matrix_title').value = getMatrixTitle();
-    document.getElementById('setting_dvt1_label').value = getDvt1Label();
-    document.getElementById('setting_dvt2_label').value = getDvt2Label();
+    var savedFilters = getRobotFilterLabels();
+    var filterLines = Object.keys(savedFilters).map(function(key) { return key + ' = ' + savedFilters[key]; });
+    if (!filterLines.length) filterLines = ['dvt1 = ' + getDvt1Label(), 'dvt2 = ' + getDvt2Label()];
+    document.getElementById('setting_filter_labels').value = filterLines.join('\n');
     document.getElementById('setting_testers').value = getRegisteredTesterNames().join('\n');
     document.getElementById('setting_lang').value = currentLang;
     hydrateRegisteredTesterList();
@@ -2167,16 +2221,15 @@
   function saveSettings(e) {
     e.preventDefault();
     var newTitle = document.getElementById('setting_matrix_title').value.trim();
-    var newDvt1 = document.getElementById('setting_dvt1_label').value.trim();
-    var newDvt2 = document.getElementById('setting_dvt2_label').value.trim();
+    var filterLabels = {};
+    document.getElementById('setting_filter_labels').value.split(/\n+/).forEach(function(line) { var parts = line.split('='); var key = String(parts.shift() || '').trim().toLowerCase(); var label = parts.join('=').trim(); if (key && label) filterLabels[key] = label; });
     var testerNames = document.getElementById('setting_testers').value.split(/[\n,]+/).map(function(name) { return name.trim(); }).filter(Boolean);
     var uniqueTesters = [];
     testerNames.forEach(function(name) { if (uniqueTesters.indexOf(name) === -1) uniqueTesters.push(name); });
     var newLang = document.getElementById('setting_lang').value;
     
     if (newTitle) localStorage.setItem('custom_matrix_title', newTitle);
-    if (newDvt1) localStorage.setItem('custom_dvt1_label', newDvt1);
-    if (newDvt2) localStorage.setItem('custom_dvt2_label', newDvt2);
+    localStorage.setItem('custom_robot_filter_labels', JSON.stringify(filterLabels));
     currentLang = newLang;
     localStorage.setItem('app_lang', newLang);
     
@@ -2215,6 +2268,7 @@
     if (!isGenericModule(tabId) || prefetchedTabs[tabId] || tabId === currentTab) return;
     prefetchedTabs[tabId] = true;
     var methods = {
+      headdepth:'getHeadDepthData',
       ratedspeed:'getRatedSpeedData', estop:'getEStopData', turningwidth:'getTurningWidthData',
       clifflowerspeed:'getCliffLowerSpeedData', traversegap:'getTraverseGapData', narrow:'getNarrowCorridorData',
       apriltag:'getAprilTagData', accuracylaser:'getModuleData', accuracyapriltag:'getModuleData'
@@ -2238,6 +2292,9 @@
     var lastTab = hashTab || localStorage.getItem('active_dashboard_tab') || localStorage.getItem('last_iso_tab');
     if (lastTab === 'generalinfo') lastTab = 'general';
     switchTab(document.getElementById('nav-' + lastTab) ? lastTab : 'overview');
+    // Warm the Head Depth metadata cache in the background. This removes the
+    // Google Sheets round-trip from the user's first click on that tab.
+    window.setTimeout(function() { prefetchModuleTab('headdepth'); }, 250);
     window.setInterval(updateSyncRelativeLabel, 5000);
     document.querySelectorAll('.nav-item').forEach(function(item) {
       var tabId = item.id.replace(/^nav-/, '');

@@ -16,45 +16,26 @@ function urlToBase64(url) {
 }
 
 function getHeadDepthData() {
-  var result = getModuleData('headdepth');
-  if (!result || !Array.isArray(result.rows)) return result;
+  // Return metadata and image URLs immediately. The browser loads thumbnails
+  // lazily after the table has painted; no UrlFetchApp or Base64 work blocks
+  // the main Head Depth response.
+  return getModuleData('headdepth');
+}
 
-  // Sheets internal image URLs are not directly loadable from the sandboxed UI.
-  // Fetch the two image columns in one batch without Auth headers and convert to base64.
-  var urlMap = {};
-  var requests = [];
-  result.rows.forEach(function(row) {
-    [8, 9].forEach(function(index) {
-      var value = String(row[index] || '').trim();
-      if (value.indexOf('http') === 0 && !Object.prototype.hasOwnProperty.call(urlMap, value)) {
-        urlMap[value] = null;
-        requests.push({
-          url: value,
-          muteHttpExceptions: true
-        });
-      }
-    });
-  });
-
-  if (requests.length) {
-    var responses = UrlFetchApp.fetchAll(requests);
-    requests.forEach(function(request, index) {
-      var response = responses[index];
-      if (response && response.getResponseCode() === 200) {
-        var blob = response.getBlob();
-        urlMap[request.url] = 'data:' + (blob.getContentType() || 'image/png') + ';base64,' + Utilities.base64Encode(blob.getBytes());
-      }
-    });
+function saveHeadDepthImage(payload) {
+  try {
+    payload = payload || {};
+    var dataUrl = String(payload.dataUrl || '');
+    var match = dataUrl.match(/^data:(image\/[\w.+-]+);base64,(.+)$/);
+    if (!match) return { success:false, error:'Invalid image upload.' };
+    if (match[2].length > 12000000) return { success:false, error:'Image is too large. Please choose a smaller image.' };
+    var bytes = Utilities.base64Decode(match[2]);
+    var blob = Utilities.newBlob(bytes, match[1], String(payload.filename || 'head-depth-camera-image'));
+    var file = DriveApp.createFile(blob);
+    return { success:true, url:file.getUrl(), name:file.getName() };
+  } catch (error) {
+    return { success:false, error:String(error) };
   }
-
-  result.rows.forEach(function(row) {
-    [8, 9].forEach(function(index) {
-      var value = String(row[index] || '').trim();
-      if (urlMap[value]) row[index] = urlMap[value];
-    });
-  });
-
-  return result;
 }
 
 /** Append one Head Depth Camera record in the sheet's fixed 14-column order. */

@@ -124,6 +124,10 @@ function getIsoImageData(payload) {
 
     var sheet = SpreadsheetApp.openByUrl(DATABASE_URL).getSheetByName(sheetName);
     if (!sheet) return { success: false, error: 'Image sheet not found.' };
+    var imageCache = CacheService.getScriptCache();
+    var imageCacheKey = 'iso_img_' + Utilities.base64EncodeWebSafe(sheetName + ':' + row + ':' + column).slice(0, 180);
+    var cachedImage = imageCache.get(imageCacheKey);
+    if (cachedImage) return { success:true, dataUrl:cachedImage };
     var cell = sheet.getRange(row, column);
     var raw = cell.getValue();
     var formula = cell.getFormula();
@@ -149,7 +153,9 @@ function getIsoImageData(payload) {
         var driveBlob = driveFile.getThumbnail() || driveFile.getBlob();
         var driveType = String(driveBlob.getContentType() || '').toLowerCase();
         if (driveType.indexOf('image/') === 0) {
-          return { success: true, dataUrl: 'data:' + driveType + ';base64,' + Utilities.base64Encode(driveBlob.getBytes()) };
+          var driveData = 'data:' + driveType + ';base64,' + Utilities.base64Encode(driveBlob.getBytes());
+          if (driveData.length < 95000) imageCache.put(imageCacheKey, driveData, 21600);
+          return { success: true, dataUrl: driveData };
         }
       } catch (driveError) { /* fall through to URL fetch variants */ }
     }
@@ -165,7 +171,9 @@ function getIsoImageData(payload) {
       var blob = response.getBlob();
       var contentType = String(blob.getContentType() || '').toLowerCase();
       if (contentType.indexOf('image/') !== 0) continue;
-      return { success: true, dataUrl: 'data:' + contentType + ';base64,' + Utilities.base64Encode(blob.getBytes()) };
+      var imageData = 'data:' + contentType + ';base64,' + Utilities.base64Encode(blob.getBytes());
+      if (imageData.length < 95000) imageCache.put(imageCacheKey, imageData, 21600);
+      return { success: true, dataUrl: imageData };
     }
     return { success: false, error: 'Image access denied or returned a non-image response.' };
   } catch (err) {

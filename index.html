@@ -146,37 +146,32 @@
 
   <div class="modal-overlay" id="settingsModal">
     <div class="modal-box">
-      <h3>⚙️ System Settings</h3>
+      <h3 id="settings_title">⚙️ System Settings</h3>
       <form onsubmit="saveSettings(event)">
         <div class="form-group">
-          <label>Display Language / 系統語言</label>
+          <label id="settings_language_label">Display Language / 系統語言</label>
           <select id="setting_lang">
             <option value="en">English (US)</option>
             <option value="zh">繁體中文 (Traditional Chinese)</option>
           </select>
         </div>
         <div class="form-group">
-          <label>Custom Matrix Section Title</label>
+          <label id="settings_matrix_label">Custom Matrix Section Title</label>
           <input type="text" id="setting_matrix_title" placeholder="Master Test Execution Matrix">
         </div>
-        <div style="display:flex; gap:1rem;">
-          <div class="form-group" style="flex:1;">
-            <label>DVT1 Filter Label</label>
-            <input type="text" id="setting_dvt1_label" placeholder="AC3110-DVT1">
-          </div>
-          <div class="form-group" style="flex:1;">
-            <label>DVT2 Filter Label</label>
-            <input type="text" id="setting_dvt2_label" placeholder="AC3110-DVT2">
-          </div>
+        <div class="form-group">
+          <label id="settings_filter_label">Robot Filter Labels</label>
+          <textarea id="setting_filter_labels" rows="4" placeholder="dvt1 = AC3110-DVT1&#10;dvt2 = AC3110-DVT2&#10;pilot = Pilot Robots"></textarea>
+          <small id="settings_filter_help" style="color:var(--text-muted); font-size:.62rem;">One label per line using key = label. Add as many labels as needed.</small>
         </div>
         <div class="form-group">
-          <label>Registered Tester Names</label>
+          <label id="settings_testers_label">Registered Tester Names</label>
           <textarea id="setting_testers" rows="3" placeholder="One tester per line"></textarea>
           <small style="color:var(--text-muted); font-size:.62rem;">These names will appear in tester dropdowns across all ISO modules.</small>
         </div>
         <div style="display:flex; justify-content:flex-end; gap:0.6rem; margin-top:0.5rem;">
-          <button type="button" class="btn-ctrl" onclick="closeSettingsModal()">Cancel</button>
-          <button type="submit" class="btn-action">Save Settings</button>
+          <button type="button" class="btn-ctrl" id="settings_cancel" onclick="closeSettingsModal()">Cancel</button>
+          <button type="submit" class="btn-action" id="settings_save">Save Settings</button>
         </div>
       </form>
     </div>

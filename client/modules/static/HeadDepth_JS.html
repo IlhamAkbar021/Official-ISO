@@ -54,19 +54,76 @@
     }
   }
 
-  function renderThumb(base64Data) {
+  function renderThumb(base64Data, sheetName, sheetRow, sheetColumn) {
     var text = String(base64Data || '').trim();
     if (!text.startsWith('data:image')) {
       if (text.startsWith('http')) {
-        return '<div class="thumb-cell"><a class="data-link" href="' + escapeHtml(text) + '" target="_blank" rel="noopener">Link ↗</a></div>';
+        var safeUrl = escapeHtml(text);
+        return '<div class="thumb-cell head-depth-lazy-thumb">' +
+          '<img src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" loading="lazy" decoding="async" class="depth-thumbnail head-depth-image-pending" alt="Loading depth map" data-image-url="' + safeUrl + '" data-sheet-name="' + escapeHtml(sheetName || '') + '" data-sheet-row="' + (sheetRow || '') + '" data-sheet-column="' + (sheetColumn || '') + '" onclick="openHeadDepthImagePreview(this.dataset.imageUrl)">' +
+          '<button type="button" class="btn-link-preview" data-image-url="' + safeUrl + '" style="display:none" onclick="openHeadDepthImagePreview(this.dataset.imageUrl)">Link ↗</button>' +
+          '</div>';
       }
       return '<span style="color:#CBD5E1">-</span>';
     }
     return '<div class="thumb-cell"><img src="' + text + '" class="depth-thumbnail" alt="Depth Map" onclick="openHeadDepthLightbox(this.src)" title="Click to enlarge"></div>';
   }
 
-  function renderHeadDepthImageValue(value, label) {
-    return renderThumb(value);
+  function renderHeadDepthImageValue(value, label, sheetName, sheetRow, sheetColumn) {
+    return renderThumb(value, sheetName, sheetRow, sheetColumn);
+  }
+
+  function loadProtectedHeadDepthImage(img) {
+    if (!img || img.dataset.loading === '1' || img.dataset.loaded === '1' || typeof google === 'undefined' || !google.script || !google.script.run) return;
+    var row = Number(img.dataset.sheetRow);
+    var column = Number(img.dataset.sheetColumn);
+    var sheetName = img.dataset.sheetName || '';
+    if (!row || !column || !sheetName) return;
+    var sourceFingerprint = String(img.dataset.imageUrl || '').slice(-48).replace(/[^a-zA-Z0-9]/g, '_');
+    var browserCacheKey = 'head_depth_image_' + sheetName + '_' + row + '_' + column + '_' + sourceFingerprint;
+    try {
+      var browserCached = localStorage.getItem(browserCacheKey);
+      if (browserCached && browserCached.indexOf('data:image/') === 0) {
+        img.src = browserCached;
+        img.dataset.imageUrl = browserCached;
+        img.dataset.loaded = '1';
+        img.classList.remove('head-depth-image-pending');
+        return;
+      }
+    } catch (cacheReadError) {}
+    img.dataset.loading = '1';
+    google.script.run.withSuccessHandler(function(result) {
+      if (result && result.success && result.dataUrl) {
+        img.onerror = null;
+        img.src = result.dataUrl;
+        img.dataset.imageUrl = result.dataUrl;
+        img.dataset.loaded = '1';
+        img.classList.remove('head-depth-image-pending');
+        try { localStorage.setItem(browserCacheKey, result.dataUrl); } catch (cacheWriteError) {}
+      } else if (img.nextElementSibling) {
+        img.style.display = 'none';
+        img.nextElementSibling.style.display = 'inline-flex';
+      }
+    }).withFailureHandler(function() {
+      if (img.nextElementSibling) {
+        img.style.display = 'none';
+        img.nextElementSibling.style.display = 'inline-flex';
+      }
+    }).getIsoImageData({ sheetName:sheetName, row:row, column:column });
+  }
+
+  function hydrateHeadDepthImages() {
+    document.querySelectorAll('.head-depth-image-pending').forEach(function(img) {
+      loadProtectedHeadDepthImage(img);
+    });
+  }
+
+  function openHeadDepthImagePreview(url) {
+    var source = String(url || '').trim();
+    if (!source) return;
+    // Public URLs can be previewed directly. Protected Sheet/Drive URLs use
+    // the existing authorized backend image endpoint only when needed.
+    openHeadDepthLightbox(source);
   }
 
   function renderHeadDepthSmartTable(response, filteredRows) {
@@ -88,9 +145,10 @@
       var sourceRow = headerRow + 1 + item.originalIndex;
       var robot = row[order.robot] || '—';
       html += '<tr data-head-depth-row="' + sourceRow + '" data-robot-id="' + escapeHtml(robot) + '">';
-      html += '<td class="identity-cell"><strong>' + escapeHtml(robot) + '</strong></td><td>' + escapeHtml(row[order.date] || '—') + '</td><td>' + escapeHtml(row[order.sw] || '—') + '</td><td>' + escapeHtml(row[order.temp] || '—') + '</td><td>' + escapeHtml(row[order.humidity] || '—') + '</td><td>' + escapeHtml(row[order.lux] || '—') + '</td><td>' + escapeHtml(row[order.tester] || '—') + '</td><td>' + escapeHtml(row[order.point03] || '—') + '</td><td>' + renderHeadDepthImageValue(row[order.image05], labels[order.image05]) + '</td><td>' + renderHeadDepthImageValue(row[order.image10], labels[order.image10]) + '</td><td>' + escapeHtml(row[order.shrink] || '—') + '</td><td>' + escapeHtml(row[order.undetected] || '—') + '</td><td>' + renderStatusBadge(row[order.status] || 'Pass') + '</td><td>' + (row[order.note] ? (isValidUrl(String(row[order.note])) ? '<a class="data-link" href="' + escapeHtml(row[order.note]) + '" target="_blank" rel="noopener">Open ↗</a>' : escapeHtml(row[order.note])) : '<span class="empty-cell">—</span>') + '</td><td class="module-action-cell">' + renderGenericActionDropdown('headdepth', sourceRow) + '</td></tr>';
+      html += '<td class="identity-cell"><strong>' + escapeHtml(robot) + '</strong></td><td>' + escapeHtml(row[order.date] || '—') + '</td><td>' + escapeHtml(row[order.sw] || '—') + '</td><td>' + escapeHtml(row[order.temp] || '—') + '</td><td>' + escapeHtml(row[order.humidity] || '—') + '</td><td>' + escapeHtml(row[order.lux] || '—') + '</td><td>' + escapeHtml(row[order.tester] || '—') + '</td><td>' + escapeHtml(row[order.point03] || '—') + '</td><td>' + renderHeadDepthImageValue(row[order.image05], labels[order.image05], response.sheetName, sourceRow, 9) + '</td><td>' + renderHeadDepthImageValue(row[order.image10], labels[order.image10], response.sheetName, sourceRow, 10) + '</td><td>' + escapeHtml(row[order.shrink] || '—') + '</td><td>' + escapeHtml(row[order.undetected] || '—') + '</td><td>' + renderStatusBadge(row[order.status] || 'Pass') + '</td><td>' + (row[order.note] ? (isValidUrl(String(row[order.note])) ? '<a class="data-link" href="' + escapeHtml(row[order.note]) + '" target="_blank" rel="noopener">Open ↗</a>' : escapeHtml(row[order.note])) : '<span class="empty-cell">—</span>') + '</td><td class="module-action-cell">' + renderGenericActionDropdown('headdepth', sourceRow) + '</td></tr>';
     });
     container.innerHTML = html + '</tbody></table></div></div>';
+    window.setTimeout(hydrateHeadDepthImages, 0);
     setSyncState('Synced ' + response.updatedAt, 'ready');
   }
 
@@ -116,6 +174,35 @@
     preview.innerHTML = isValidUrl(url) ? '<img src="' + escapeHtml(url) + '" alt="Image preview" onerror="this.parentElement.innerHTML=\'<span>Preview unavailable</span>\'">' : '<span>Paste a valid image URL to preview</span>';
   }
 
+  function uploadHeadDepthImage(input, targetId, previewId) {
+    var file = input && input.files && input.files[0];
+    if (!file || !/^image\//i.test(file.type)) return;
+    var reader = new FileReader();
+    reader.onload = function(event) {
+      var preview = document.getElementById(previewId);
+      if (preview) preview.innerHTML = '<span>Uploading image…</span>';
+      google.script.run.withSuccessHandler(function(response) {
+        var target = document.getElementById(targetId);
+        if (!response || !response.success) {
+          if (preview) preview.innerHTML = '<span>Upload failed. Please try a smaller image.</span>';
+          return;
+        }
+        if (target) target.value = response.url;
+        updateHeadDepthImagePreview(previewId, response.url);
+      }).withFailureHandler(function() {
+        if (preview) preview.innerHTML = '<span>Upload failed. Please try again.</span>';
+      }).saveHeadDepthImage({ dataUrl:event.target.result, filename:file.name });
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function openIsoDatePicker(inputId) {
+    var input = typeof inputId === 'string' ? document.getElementById(inputId) : inputId;
+    if (!input) return;
+    if (typeof input.showPicker === 'function') input.showPicker();
+    else input.focus();
+  }
+
   function setHeadDepthStatus(value) {
     var field = document.getElementById('hd_status');
     if (field) field.value = value === 'Fail' ? 'Fail' : 'Pass';
@@ -134,8 +221,15 @@
     var now = new Date();
     var today = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
     var modal = ensureHeadDepthRecordModal();
-    modal.innerHTML = '<div class="head-depth-record-panel table-card" role="dialog" aria-modal="true" aria-labelledby="headDepthRecordTitle"><header><div><span>SMART DATA ENTRY</span><h3 id="headDepthRecordTitle">Add Head Depth Camera Record</h3><p>Paste a 14-column sheet row or enter the environment and measurement values.</p></div><button type="button" onclick="closeHeadDepthRecordModal()" aria-label="Close">×</button></header><form id="headDepthRecordForm" onsubmit="submitHeadDepthRecord(event)"><div class="head-depth-entry-grid"><section><h4>Meta &amp; Environment</h4><label><span>Robot ID</span><select id="hd_robot" required>' + headDepthSelectOptions(robots,lastRobot) + '</select></label><label><span>Date</span><input id="hd_date" value="' + today + '" required></label><label><span>SW Version</span><input id="hd_sw" list="headDepthSwList" value="' + escapeHtml(lastSw) + '" required><datalist id="headDepthSwList">' + headDepthSelectOptions(headDepthUniqueValues(rows,order.sw),'') + '</datalist></label><label><span>Tester</span><input id="hd_tester" list="registeredTesterList" value="' + escapeHtml(lastTester) + '" required></label><label><span>Temp C</span><input id="hd_temp" type="number" step="0.1"></label><label><span>Humidity %</span><input id="hd_humidity" type="number" step="0.1"></label><label><span>Luminosity Lux</span><input id="hd_lux"></label></section><section><h4>Measurements</h4><label><span>0.3m</span><input id="hd_point03" value="undetected"></label><label><span>0.5m Image URL</span><input id="hd_image05" oninput="updateHeadDepthImagePreview(\'hd_preview05\',this.value)"><div id="hd_preview05" class="head-depth-url-preview"><span>Paste a valid image URL to preview</span></div></label><label><span>1.0m Image URL</span><input id="hd_image10" oninput="updateHeadDepthImagePreview(\'hd_preview10\',this.value)"><div id="hd_preview10" class="head-depth-url-preview"><span>Paste a valid image URL to preview</span></div></label><div class="head-depth-two-fields"><label><span>Shrink Distance (m)</span><input id="hd_shrink" type="number" step="0.001"></label><label><span>Totally Undetected (m)</span><input id="hd_undetected" type="number" step="0.001"></label></div><label><span>Status</span><div class="head-depth-status-toggle"><button type="button" data-value="Pass" class="active" onclick="setHeadDepthStatus(\'Pass\')">Pass</button><button type="button" data-value="Fail" onclick="setHeadDepthStatus(\'Fail\')">Fail</button><input id="hd_status" type="hidden" value="Pass"></div></label><label><span>Note / Link</span><input id="hd_note"></label></section></div><div class="head-depth-paste-strip"><strong>Ctrl + V ready</strong><span>Tab-separated order: Robot, Date, SW, Temp, Humidity, Lux, Tester, 0.3m, 0.5m, 1.0m, Shrink, Undetected, Status, Note</span></div><footer><span>14 columns will be appended to the Head Depth sheet</span><button type="button" class="btn-ctrl" onclick="closeHeadDepthRecordModal()">Cancel</button><button type="submit" class="btn-action" id="headDepthSaveButton">Save Record</button></footer></form></div>';
+    modal.innerHTML = '<div class="head-depth-record-panel table-card" role="dialog" aria-modal="true" aria-labelledby="headDepthRecordTitle"><header><div><h3 id="headDepthRecordTitle">Add Head Depth Camera Record</h3><p>Paste a 14-column sheet row or enter the environment and measurement values.</p></div><button type="button" onclick="closeHeadDepthRecordModal()" aria-label="Close">×</button></header><form id="headDepthRecordForm" onsubmit="submitHeadDepthRecord(event)"><div class="head-depth-entry-grid"><section><h4>Meta &amp; Environment</h4><label><span>Robot ID</span><select id="hd_robot" required>' + headDepthSelectOptions(robots,lastRobot) + '</select></label><label><span>Date</span><input id="hd_date" value="' + today + '" required></label><label><span>SW Version</span><input id="hd_sw" list="headDepthSwList" value="' + escapeHtml(lastSw) + '" required><datalist id="headDepthSwList">' + headDepthSelectOptions(headDepthUniqueValues(rows,order.sw),'') + '</datalist></label><label><span>Tester</span><input id="hd_tester" list="registeredTesterList" value="' + escapeHtml(lastTester) + '" required></label><label><span>Temp C</span><input id="hd_temp" type="number" step="0.1"></label><label><span>Humidity %</span><input id="hd_humidity" type="number" step="0.1"></label><label><span>Luminosity Lux</span><input id="hd_lux"></label></section><section><h4>Measurements</h4><label><span>0.3m</span><input id="hd_point03" value="undetected"></label><label><span>0.5m Image URL</span><input id="hd_image05" oninput="updateHeadDepthImagePreview(\'hd_preview05\',this.value)"><div id="hd_preview05" class="head-depth-url-preview"><span>Paste a valid image URL to preview</span></div></label><label><span>1.0m Image URL</span><input id="hd_image10" oninput="updateHeadDepthImagePreview(\'hd_preview10\',this.value)"><div id="hd_preview10" class="head-depth-url-preview"><span>Paste a valid image URL to preview</span></div></label><div class="head-depth-two-fields"><label><span>Shrink Distance (m)</span><input id="hd_shrink" type="number" step="0.001"></label><label><span>Totally Undetected (m)</span><input id="hd_undetected" type="number" step="0.001"></label></div><label><span>Status</span><div class="head-depth-status-toggle"><button type="button" data-value="Pass" class="active" onclick="setHeadDepthStatus(\'Pass\')">Pass</button><button type="button" data-value="Fail" onclick="setHeadDepthStatus(\'Fail\')">Fail</button><input id="hd_status" type="hidden" value="Pass"></div></label><label><span>Note / Link</span><input id="hd_note"></label></section></div><div class="head-depth-paste-strip"><strong>Ctrl + V ready</strong><span>Tab-separated order: Robot, Date, SW, Temp, Humidity, Lux, Tester, 0.3m, 0.5m, 1.0m, Shrink, Undetected, Status, Note</span></div><footer><span>14 columns will be appended to the Head Depth sheet</span><button type="button" class="btn-ctrl" onclick="closeHeadDepthRecordModal()">Cancel</button><button type="submit" class="btn-action" id="headDepthSaveButton">Save Record</button></footer></form></div>';
     modal.style.display = 'flex';
+    var headDepthDateInput = document.getElementById('hd_date');
+    if (headDepthDateInput) headDepthDateInput.type = 'date';
+    if (headDepthDateInput) headDepthDateInput.insertAdjacentHTML('afterend', '<button type="button" class="iso-date-picker-button" onclick="openIsoDatePicker(\'hd_date\')" aria-label="Open calendar">📅</button>');
+    var image05 = document.getElementById('hd_image05');
+    var image10 = document.getElementById('hd_image10');
+    if (image05) image05.insertAdjacentHTML('afterend', '<span class="head-depth-upload-label">Or upload image <input type="file" accept="image/*" onchange="uploadHeadDepthImage(this,\'hd_image05\',\'hd_preview05\')"></span>');
+    if (image10) image10.insertAdjacentHTML('afterend', '<span class="head-depth-upload-label">Or upload image <input type="file" accept="image/*" onchange="uploadHeadDepthImage(this,\'hd_image10\',\'hd_preview10\')"></span>');
   }
 
   function closeHeadDepthRecordModal() {

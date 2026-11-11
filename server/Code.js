@@ -16,6 +16,19 @@ var APP_CONFIG = ISOApp.Config;
 var REGISTERED_TESTERS_PROPERTY = ISOApp.Config.testerProperty;
 var DEFAULT_REGISTERED_TESTERS = ISOApp.Config.defaultTesters;
 
+// Force the next Static ISO read to come directly from Google Sheets.
+function clearStaticIsoCache() {
+  var keys = [
+    'iso_lidar_data', 'iso_wifi_data', 'iso_overview_v3',
+    'iso_module_headdepth', 'iso_module_basedepth', 'iso_module_cliff',
+    'iso_module_apriltag', 'iso_module_estop', 'iso_module_ratedspeed',
+    'iso_module_turningwidth', 'iso_module_clifflowerspeed',
+    'iso_module_traversegap', 'iso_module_narrow'
+  ];
+  CacheService.getScriptCache().removeAll(keys);
+  return { success: true };
+}
+
 function normalizeRegisteredTesters_(names) {
   return ISOApp.Text.normalizeNames(names);
 }
