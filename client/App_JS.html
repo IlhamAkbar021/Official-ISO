@@ -626,7 +626,7 @@
   function renderCachedTab(cached) {
     if (!cached || !cached.data) return;
     if (cached.type === 'overview') { renderOverview(cached.data, rawHeadDepthResponse); }
-    if (cached.type === 'module') { rawModuleResponse = cached.data; renderSmartModule(cached.data); }
+    if (cached.type === 'module') { rawModuleResponse = cached.data; renderSmartModule(cached.data, true); }
     if (cached.type === 'wifi') { rawWifiResponse = cached.data; renderTable(cached.data); }
     if (cached.type === 'lidar') { rawLidarResponse = cached.data; renderSplitLidarTable(cached.data); }
     setSyncState('Cached view · refreshing…', 'loading');
@@ -662,7 +662,7 @@
     return purposes[moduleKey] || fallback || 'To validate ISO test performance and measurement behavior for this module.';
   }
 
-  function renderSmartModule(response) {
+  function renderSmartModule(response, skipHeadDepthImages) {
     var container = document.getElementById('tableContainer');
     if (!response || !response.success) {
       setSyncState(response && response.missingSheet ? 'Sheet tab not matched' : 'Connection issue', 'error');
@@ -717,7 +717,7 @@
         var helperDescriptionRow = /is starting to shrink|becomes totally undetected/.test(text);
         return !(helperDistanceRow || (helperDescriptionRow && !robotValue));
       });
-      renderHeadDepthSmartTable(response, rows);
+      renderHeadDepthSmartTable(response, rows, !!skipHeadDepthImages);
       return;
     }
     var compactFlatModule = response.key === 'cliff';
@@ -1578,7 +1578,7 @@
     // expands the accuracy rows with the related tilt fields.
     var recordCount = visibleAccuracy.length;
     var html = '<div class="lidar-inspection-page"><div class="panel-card smart-table-card lidar-card lidar-panel lidar-inspection-card ' + (isAccuracy ? 'lidar-accuracy-view' : 'lidar-tilt-expanded') + '">' +
-      '<div class="module-unified-hero"><div class="hero-left"><span class="eyebrow">DATA EXPLORER</span><h1 class="hero-title">LiDAR Accuracy Inspection</h1><p class="hero-purpose"><strong>PURPOSE</strong><span>' + escapeHtml(getModulePurpose('lidar')) + '</span></p></div><div class="hero-actions"><span class="hero-badge-count">' + recordCount + ' units</span></div></div>' + renderLidarKpiStrip(summary) + '<div class="table-scroller lidar-table-scroll">';
+      '<div class="module-unified-hero"><div class="hero-left"><span class="eyebrow">DATA EXPLORER</span><h1 class="hero-title">LiDAR</h1><p class="hero-purpose"><strong>PURPOSE</strong><span>' + escapeHtml(getModulePurpose('lidar')) + '</span></p></div><div class="hero-actions"><span class="hero-badge-count">' + recordCount + ' units</span></div></div>' + renderLidarKpiStrip(summary) + '<div class="table-scroller lidar-table-scroll">';
 
     if (true) {
       html += '<table class="lidar-table lidar-accuracy-table lidar-inspection-table"><colgroup><col class="lidar-id-col"><col class="lidar-release-col"><col class="lidar-tester-col"><col class="lidar-measure-col"><col class="lidar-measure-col"><col class="lidar-measure-col">' + (!isAccuracy ? '<col class="lidar-small-col"><col class="lidar-distance-col"><col class="lidar-small-col"><col class="lidar-small-col"><col class="lidar-status-col"><col class="lidar-angle-col"><col class="lidar-note-col">' : '') + '<col class="lidar-action-col"></colgroup><thead><tr><th>Robot ID</th><th>Software / Date</th><th>Tester</th><th>Target 5 m</th><th>Target 10 m</th><th>Target 15 m</th>' + (!isAccuracy ? '<th>Bricks</th><th>Detected Distance</th><th>Height From</th><th>Height To</th><th>Tilt Status</th><th>Angle Range</th><th>Note / Link</th>' : '') + '<th>' + t('actions') + '</th></tr></thead><tbody>';
@@ -1900,8 +1900,16 @@
         menu.style.position = 'fixed';
         menu.style.right = 'auto';
         menu.style.left = Math.max(6, rect.right - 145) + 'px';
-        menu.style.top = (rect.bottom + 5) + 'px';
         menu.style.zIndex = '100000';
+        // Open upward when the action button is near the bottom of the
+        // viewport so the menu stays inside the table/card instead of being
+        // clipped or overlapping the next layout section.
+        var menuHeight = menu.getBoundingClientRect().height;
+        var spaceBelow = window.innerHeight - rect.bottom;
+        var top = spaceBelow < menuHeight + 8
+          ? Math.max(6, rect.top - menuHeight - 5)
+          : rect.bottom + 5;
+        menu.style.top = top + 'px';
       } else {
         menu.removeAttribute('style');
       }

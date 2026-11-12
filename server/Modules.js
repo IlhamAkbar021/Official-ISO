@@ -550,6 +550,14 @@ function getModuleData(moduleKey) {
       var hasData = false;
       for (var col = 0; col < lastColumn; col++) {
         var cell = getIsoCell_(displayValues, richValues, formulas, rawValues, rowIndex, col);
+        // Head Depth image columns follow General Info behavior: resolve the
+        // protected sheet image once on the server and return the cached
+        // thumbnail with the row data. This prevents a second browser fetch
+        // after every cached/live table render.
+        if (moduleKey === 'headdepth' && (col === 8 || col === 9) && /^https?:\/\//i.test(String(cell || ''))) {
+          var headDepthImage = getIsoImageData({ sheetName: sheet.getName(), row: sectionOffset + rowIndex + 1, column: col + 1 });
+          if (headDepthImage && headDepthImage.success && headDepthImage.dataUrl) cell = headDepthImage.dataUrl;
+        }
         if (cell !== '') hasData = true;
         row.push(cell);
       }
@@ -574,7 +582,11 @@ function getModuleData(moduleKey) {
     };
     // Applies to every generic module: Base Depth, IR Cliff, Head Depth,
     // Dynamic ISO modules, and Accuracy & Repeatability modules.
-    try { cache.put(cacheKey, JSON.stringify(result), 60); } catch (cacheWriteError) { /* cache is optional */ }
+    // Head Depth includes protected thumbnails. Keep the same long-lived cache
+    // behavior as General Info so navigation does not re-open Sheets and
+    // decode every image row. Record writes explicitly invalidate this key.
+    var moduleCacheTtl = moduleKey === 'headdepth' ? 21600 : 60;
+    try { cache.put(cacheKey, JSON.stringify(result), moduleCacheTtl); } catch (cacheWriteError) { /* cache is optional */ }
     return result;
   } catch (err) {
     return { success: false, error: err.toString() };

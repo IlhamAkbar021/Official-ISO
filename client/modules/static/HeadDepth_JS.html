@@ -126,7 +126,7 @@
     openHeadDepthLightbox(source);
   }
 
-  function renderHeadDepthSmartTable(response, filteredRows) {
+  function renderHeadDepthSmartTable(response, filteredRows, skipImageHydration) {
     var container = document.getElementById('tableContainer');
     var rows = (filteredRows || []).slice();
     var headerRow = response.headerRow || 1;
@@ -148,7 +148,7 @@
       html += '<td class="identity-cell"><strong>' + escapeHtml(robot) + '</strong></td><td>' + escapeHtml(row[order.date] || '—') + '</td><td>' + escapeHtml(row[order.sw] || '—') + '</td><td>' + escapeHtml(row[order.temp] || '—') + '</td><td>' + escapeHtml(row[order.humidity] || '—') + '</td><td>' + escapeHtml(row[order.lux] || '—') + '</td><td>' + escapeHtml(row[order.tester] || '—') + '</td><td>' + escapeHtml(row[order.point03] || '—') + '</td><td>' + renderHeadDepthImageValue(row[order.image05], labels[order.image05], response.sheetName, sourceRow, 9) + '</td><td>' + renderHeadDepthImageValue(row[order.image10], labels[order.image10], response.sheetName, sourceRow, 10) + '</td><td>' + escapeHtml(row[order.shrink] || '—') + '</td><td>' + escapeHtml(row[order.undetected] || '—') + '</td><td>' + renderStatusBadge(row[order.status] || 'Pass') + '</td><td>' + (row[order.note] ? (isValidUrl(String(row[order.note])) ? '<a class="data-link" href="' + escapeHtml(row[order.note]) + '" target="_blank" rel="noopener">Open ↗</a>' : escapeHtml(row[order.note])) : '<span class="empty-cell">—</span>') + '</td><td class="module-action-cell">' + renderGenericActionDropdown('headdepth', sourceRow) + '</td></tr>';
     });
     container.innerHTML = html + '</tbody></table></div></div>';
-    window.setTimeout(hydrateHeadDepthImages, 0);
+    if (!skipImageHydration) window.setTimeout(hydrateHeadDepthImages, 0);
     setSyncState('Synced ' + response.updatedAt, 'ready');
   }
 

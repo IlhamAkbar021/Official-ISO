@@ -115,6 +115,33 @@ function normalizeLidarImportPayload_(payload) {
   return normalized;
 }
 
+// Keep the LiDAR tilt calculations as spreadsheet formulas.  The UI sends the
+// brick count and detected distance; the remaining tilt columns must stay
+// formula-driven so every newly-created row behaves like an existing row.
+function cloneLidarTiltFormulaColumns_(sheet, sourceRow, targetRow, brickCol) {
+  if (!sourceRow || sourceRow < 1 || sourceRow === targetRow) return;
+  var formulaStartCol = brickCol + 3; // Height From through Angle To.
+  var formulaCount = 5;
+  var sourceFormulas = sheet.getRange(sourceRow, formulaStartCol, 1, formulaCount).getFormulasR1C1()[0];
+  var hasFormula = sourceFormulas.some(function(formula) { return String(formula || '').trim() !== ''; });
+  if (hasFormula) {
+    sheet.getRange(targetRow, formulaStartCol, 1, formulaCount).setFormulasR1C1([sourceFormulas]);
+    return;
+  }
+
+  // Fallback for older template rows that contain displayed values instead of
+  // formulas.  These formulas use the same brick-to-angle mapping shown in the
+  // LiDAR reference table and remain relative to the brick cell.
+  var brickRef = 'RC[' + (brickCol - (brickCol + 3)) + ']';
+  sheet.getRange(targetRow, formulaStartCol, 1, formulaCount).setFormulasR1C1([[
+    '=IFERROR((VALUE(' + brickRef + ')-1)*10,"")',
+    '=IFERROR(VALUE(' + brickRef + ')*10,"")',
+    '=IF(' + brickRef + '="","",IF(VALUE(' + brickRef + ')<4,"Tilt Down, Acceptable",IF(VALUE(' + brickRef + ')=4,"Normal",IF(VALUE(' + brickRef + ')=5,"Tilt Up, but Acceptable","Tilt Up, Not Acceptable"))))',
+    '=IFERROR(TEXT((VALUE(' + brickRef + ')-4)*0.38,"0.00"),"")',
+    '=IFERROR(TEXT((VALUE(' + brickRef + ')-3)*0.38,"0.00"),"")'
+  ]]);
+}
+
 function addLidarRecord(payload) {
   try {
     payload = normalizeLidarImportPayload_(payload);
@@ -175,6 +202,7 @@ function addLidarRecord(payload) {
         if (h.indexOf('brick') !== -1) { colBricksIdx = k; break; }
       }
       if (colBricksIdx === -1) colBricksIdx = 11;
+      var templateTiltRow = Math.max(3, lastRow);
       var values = sheet.getRange(3, 1, Math.max(1, lastRow - 2), Math.min(numCols, 4)).getDisplayValues();
       var targetRow = -1;
       for (var rowOffset = 0; rowOffset < values.length; rowOffset++) {
@@ -193,10 +221,12 @@ function addLidarRecord(payload) {
         sheet.getRange(targetRow, 1, 3, 4).setValues([[payload.robotId || '', payload.date || '', payload.swVer || '', payload.tester || ''], ['', '', '', ''], ['', '', '', '']]);
       }
       writtenFirstRow = targetRow;
-      sheet.getRange(targetRow, colBricksIdx + 1, 1, 8).setValues([[
-        payload.bricks || '', payload.detectedDist || '', payload.heightFrom || '', payload.heightTo || '',
-        payload.tiltStatus || '', payload.angleFrom || '', payload.angleTo || '', payload.note || ''
+      // Inputs are writable; calculated columns are restored as formulas.
+      sheet.getRange(targetRow, colBricksIdx + 1, 1, 2).setValues([[
+        payload.bricks || '', payload.detectedDist || ''
       ]]);
+      cloneLidarTiltFormulaColumns_(sheet, templateTiltRow, targetRow, colBricksIdx);
+      sheet.getRange(targetRow, colBricksIdx + 8).setValue(payload.note || '');
     }
 
     SpreadsheetApp.flush();
@@ -298,8 +328,14 @@ function updateLidarRecord(payload) {
       var headers = sheet.getRange(2, 1, 1, sheet.getLastColumn()).getValues()[0];
       var brickCol = headers.findIndex(function(h){ return String(h || '').toLowerCase().indexOf('brick') !== -1; });
       if (brickCol < 0) brickCol = 11;
+      var tiltFormulaStart = brickCol + 3;
+      var existingTiltFormulas = sheet.getRange(row, tiltFormulaStart, 1, 5).getFormulasR1C1()[0];
       sheet.getRange(row, 2, 1, 3).setValues([[payload.date || '', payload.swVer || '', payload.tester || '']]);
-      sheet.getRange(row, brickCol + 1, 1, 8).setValues([[payload.bricks || '', payload.detectedDist || '', payload.heightFrom || '', payload.heightTo || '', payload.tiltStatus || '', payload.angleFrom || '', payload.angleTo || '', payload.note || '']]);
+      sheet.getRange(row, brickCol + 1, 1, 2).setValues([[payload.bricks || '', payload.detectedDist || '']]);
+      if (existingTiltFormulas.some(function(formula) { return String(formula || '').trim() !== ''; })) {
+        sheet.getRange(row, tiltFormulaStart, 1, 5).setFormulasR1C1([existingTiltFormulas]);
+      }
+      sheet.getRange(row, brickCol + 8).setValue(payload.note || '');
     }
     SpreadsheetApp.flush();
     CacheService.getScriptCache().remove('iso_lidar_data');
