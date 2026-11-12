@@ -291,6 +291,14 @@ function deleteLidarRecord_(payload) {
       var records = sheet.getRange(3, 1, Math.max(1, sheet.getLastRow() - 2), 2).getDisplayValues();
       var wantedRobot = String(payload.robotId).trim().toUpperCase();
       var wantedDate = String(payload.date || '').trim().replace(/\//g, '-');
+      var indexedRobot = targetRow >= 3 && targetRow <= sheet.getLastRow() ? String(records[targetRow - 3][0] || '').trim().toUpperCase() : '';
+      var indexedDate = targetRow >= 3 && targetRow <= sheet.getLastRow() ? String(records[targetRow - 3][1] || '').trim().replace(/\//g, '-') : '';
+      // Accuracy rows carry the raw data index from the UI. Prefer that exact
+      // physical row when its identity matches, avoiding deletion of the first
+      // duplicate Robot ID/date elsewhere in the sheet.
+      if (payload.lidarType === 'accuracy' && indexedRobot === wantedRobot && (!wantedDate || indexedDate === wantedDate)) {
+        // Keep targetRow from the UI index.
+      } else {
       var found = -1;
       for (var i = 0; i < records.length; i++) {
         var actualDate = String(records[i][1] || '').trim().replace(/\//g, '-');
@@ -301,6 +309,7 @@ function deleteLidarRecord_(payload) {
       }
       if (found < 0) return { success:false, error:'The selected LiDAR record could not be located.' };
       targetRow = found;
+      }
     }
     if (payload.lidarType === 'accuracy') {
       sheet.deleteRows(targetRow, 3);

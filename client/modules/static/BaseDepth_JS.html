@@ -870,7 +870,8 @@
     var list = document.getElementById(kind === 'robot' ? 'bdRobotChoices' : 'bdSwChoices');
     if (!input || !list || list.hidden) return;
     var rect = input.getBoundingClientRect();
-    var maxHeight = Math.min(260, Math.max(120, window.innerHeight - 24));
+    // Keep the choice panel compact so it does not cover the measurement grid.
+    var maxHeight = Math.min(180, Math.max(120, window.innerHeight - 24));
     var below = window.innerHeight - rect.bottom - 8;
     var above = rect.top - 8;
     var placeAbove = below < Math.min(190, list.scrollHeight) && above > below;

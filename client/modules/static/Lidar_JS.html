@@ -26,11 +26,11 @@
       '<!-- Accuracy Form -->' +
       '<div id="lidar_acc_box">' +
         '<div class="flex-row">' +
-          '<div class="form-group" style="flex:1;"><label>Robot ID</label><input type="text" id="l_a_robot" list="registeredRobotList" onfocus="hydrateRegisteredRobotList()" placeholder="e.g. AC3110 DVT1-1" required></div>' +
+          '<div class="form-group" style="flex:1;"><label>Robot ID</label><input type="text" id="l_a_robot" data-static-choice="robot" placeholder="e.g. AC3110 DVT1-1" required></div>' +
           '<div class="form-group" style="flex:1;"><label>Date</label><input type="date" id="l_a_date" value="' + today + '" required>' +
         '</div>' +
         '<div class="flex-row">' +
-          '<div class="form-group" style="flex:1;"><label>SW Version</label><input type="text" id="l_a_sw" list="registeredSwVersionList" onfocus="hydrateRegisteredSwVersionList()" placeholder="e.g. 2026-27-02-2" required></div>' +
+          '<div class="form-group" style="flex:1;"><label>SW Version</label><input type="text" id="l_a_sw" data-static-choice="sw" placeholder="e.g. 2026-27-02-2" required></div>' +
           '<div class="form-group" style="flex:1;"><label>Tester Name</label><input type="text" id="l_a_tester" list="registeredTesterList" onfocus="hydrateRegisteredTesterList()" placeholder="e.g. Mike" required></div>' +
         '</div>' +
 
@@ -65,7 +65,7 @@
       '<!-- Tilt Form -->' +
       '<div id="lidar_tilt_box" style="display:none;">' +
         '<div class="flex-row">' +
-          '<div class="form-group" style="flex:1;"><label>Robot ID</label><input type="text" id="l_t_robot" list="registeredRobotList" onfocus="hydrateRegisteredRobotList()" placeholder="e.g. AC3110 DVT1-1"></div>' +
+          '<div class="form-group" style="flex:1;"><label>Robot ID</label><input type="text" id="l_t_robot" data-static-choice="robot" placeholder="e.g. AC3110 DVT1-1"></div>' +
           '<div class="form-group" style="flex:1;"><label>Tester Name</label><input type="text" id="l_t_tester" list="registeredTesterList" onfocus="hydrateRegisteredTesterList()" placeholder="e.g. Ilham"></div>' +
         '</div>' +
         '<div class="flex-row">' +
@@ -95,7 +95,7 @@
       '<div class="form-group"><label>Robot ID (Read Only)</label><input type="text" value="' + (row[0] || '') + '" disabled style="opacity:0.7;"></div>' +
       '<div class="flex-row">' +
         '<div class="form-group" style="flex:1;"><label>Date</label><input type="date" id="l_a_date" value="' + String(row[1] || '').replace(/\//g,'-') + '">' +
-        '<div class="form-group" style="flex:1;"><label>SW Version</label><input type="text" id="l_a_sw" list="registeredSwVersionList" onfocus="hydrateRegisteredSwVersionList()" value="' + (row[2] || '') + '"></div>' +
+        '<div class="form-group" style="flex:1;"><label>SW Version</label><input type="text" id="l_a_sw" data-static-choice="sw" value="' + (row[2] || '') + '"></div>' +
       '</div>' +
       '<div class="form-group"><label>Tester Name</label><input type="text" id="l_a_tester" list="registeredTesterList" onfocus="hydrateRegisteredTesterList()" value="' + (row[3] || '') + '" required></div>';
     
@@ -432,7 +432,7 @@
   function renderLidarSmartPreview() {
     var data = lidarSmartParsedData || getLidarSmartDefaults();
     var testerAttrs = 'list="registeredTesterList"';
-    var commonFields = smartImportInput('smart_robot_id','Robot ID',data.robotId,'text','required pattern="AC3110-DVT[0-9]+(-[0-9]+)?" list="registeredRobotList" onfocus="hydrateRegisteredRobotList()"') + smartImportInput('smart_date','Date',data.date,'text','required') + smartImportInput('smart_sw','SW Version',data.swVer,'text','list="registeredSwVersionList" onfocus="hydrateRegisteredSwVersionList()"') + smartImportInput('smart_tester','Tester',data.tester,'text',testerAttrs);
+    var commonFields = smartImportInput('smart_robot_id','Robot ID',data.robotId,'text','required pattern="AC3110-DVT[0-9]+(-[0-9]+)?" data-static-choice="robot"') + smartImportInput('smart_date','Date',data.date,'text','required') + smartImportInput('smart_sw','SW Version',data.swVer,'text','data-static-choice="sw"') + smartImportInput('smart_tester','Tester',data.tester,'text',testerAttrs);
     var html = '<div class="smart-import-type"><div class="smart-import-mode"><span>Shared record details</span><strong>Used for Accuracy + Tilt</strong></div><span class="smart-parser-state">Enter common details once</span></div>' +
       '<div class="smart-import-common">' + commonFields + '</div>' +
       '<section class="smart-import-section"><div class="smart-import-section-heading"><div><strong>Accuracy Collection</strong><span>5 m · 10 m · 15 m</span></div><small>Optional if adding Tilt only</small></div>' +

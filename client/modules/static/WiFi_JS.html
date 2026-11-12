@@ -3,7 +3,7 @@
     loadRegisteredRobotNames();
     document.getElementById('modalTitle').innerText = 'Add Record';
     document.getElementById('formBody').innerHTML = 
-      '<div class="form-group"><label>Robot ID</label><input type="text" id="w_robot" list="registeredRobotList" onfocus="hydrateRegisteredRobotList()" placeholder="e.g. AC3110DVT1-6" required></div>' +
+      '<div class="form-group"><label>Robot ID</label><input type="text" id="w_robot" data-static-choice="robot" placeholder="e.g. AC3110DVT1-6" required></div>' +
       '<div class="form-group"><label>Tester Name</label><input type="text" id="w_tester" list="registeredTesterList" onfocus="hydrateRegisteredTesterList()" placeholder="e.g. Mike" required></div>' +
       '<div class="form-group"><label>RIGHT Side Antenna (dBm)</label><input type="number" id="w_right" placeholder="-57" required></div>' +
       '<div class="form-group"><label>RIGHT Side Test Data Link</label><input type="url" id="w_right_link" placeholder="https://..."></div>' +

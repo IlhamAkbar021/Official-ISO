@@ -20,6 +20,122 @@
   var inlineRecordModuleKey = '';
   var pendingInlineModuleResponse = null;
 
+  // Shared searchable choice panels for every Static ISO entry form.  This is
+  // intentionally delegated from document so dynamically-created modals and
+  // inline rows get the same behavior without duplicating handlers.
+  var staticIsoChoicePopup = null;
+  var staticIsoChoiceTarget = null;
+  var staticIsoChoiceIndex = -1;
+
+  function getStaticIsoChoiceValues(kind) {
+    var values = [];
+    var key = kind === 'robot' ? 'registered_robot_names' : 'registered_sw_versions';
+    try { values = values.concat(JSON.parse(localStorage.getItem(key) || '[]')); } catch (e) {}
+    var list = document.getElementById(kind === 'robot' ? 'registeredRobotList' : 'registeredSwVersionList');
+    if (list) Array.prototype.forEach.call(list.options, function(option) { values.push(option.value); });
+    var seen = {};
+    return values.map(function(value) { return String(value || '').trim(); }).filter(function(value) {
+      var id = value.toLowerCase(); if (!value || seen[id]) return false; seen[id] = true; return true;
+    }).sort(function(a,b) { return a.localeCompare(b, undefined, {numeric:true, sensitivity:'base'}); });
+  }
+
+  function ensureStaticIsoChoicePopup() {
+    if (staticIsoChoicePopup) return staticIsoChoicePopup;
+    staticIsoChoicePopup = document.createElement('div');
+    staticIsoChoicePopup.className = 'static-iso-choice-panel';
+    staticIsoChoicePopup.setAttribute('role', 'listbox');
+    staticIsoChoicePopup.hidden = true;
+    document.body.appendChild(staticIsoChoicePopup);
+    return staticIsoChoicePopup;
+  }
+
+  function closeStaticIsoChoicePanel() {
+    if (staticIsoChoicePopup) { staticIsoChoicePopup.hidden = true; staticIsoChoicePopup.innerHTML = ''; }
+    if (staticIsoChoiceTarget) staticIsoChoiceTarget.setAttribute('aria-expanded', 'false');
+    staticIsoChoiceTarget = null; staticIsoChoiceIndex = -1;
+  }
+
+  function positionStaticIsoChoicePanel() {
+    if (!staticIsoChoiceTarget || !staticIsoChoicePopup || staticIsoChoicePopup.hidden) return;
+    var rect = staticIsoChoiceTarget.getBoundingClientRect();
+    var below = window.innerHeight - rect.bottom - 8;
+    var height = Math.min(260, Math.max(100, below));
+    staticIsoChoicePopup.style.left = Math.max(8, rect.left) + 'px';
+    staticIsoChoicePopup.style.top = (rect.bottom + 3) + 'px';
+    staticIsoChoicePopup.style.width = Math.min(rect.width, window.innerWidth - Math.max(8, rect.left) - 8) + 'px';
+    staticIsoChoicePopup.style.maxHeight = height + 'px';
+  }
+
+  function renderStaticIsoChoicePanel(input) {
+    var panel = ensureStaticIsoChoicePopup(), kind = input.getAttribute('data-static-choice');
+    var query = String(input.value || '').toLowerCase().trim();
+    var saved = getStaticIsoChoiceValues(kind);
+    String(input.getAttribute('data-static-choice-values') || '').split('\u001f').forEach(function(value) { if (value && saved.indexOf(value) === -1) saved.push(value); });
+    var options = saved.filter(function(value) { return !query || value.toLowerCase().indexOf(query) !== -1; }).sort(function(a,b) { return a.localeCompare(b, undefined, {numeric:true, sensitivity:'base'}); });
+    // Prevent the browser's native datalist from competing with the shared panel.
+    input.removeAttribute('list');
+    staticIsoChoiceTarget = input; staticIsoChoiceIndex = -1;
+    panel.innerHTML = options.length ? options.map(function(value) {
+      return '<button type="button" class="static-iso-choice-option" role="option" data-value="' + escapeHtml(value) + '">' + escapeHtml(value) + '</button>';
+    }).join('') : '<div class="static-iso-choice-empty">No matching saved values</div>';
+    panel.hidden = false; input.setAttribute('aria-expanded', 'true'); positionStaticIsoChoicePanel();
+  }
+
+  // Capture focus before the browser opens its native datalist popup. Keep
+  // the original options on the input, then let the custom panel own display.
+  document.addEventListener('focus', function(event) {
+    var input = event.target;
+    if (!input || !input.matches || !input.matches('[list="registeredRobotList"], [list="registeredSwVersionList"]')) return;
+    var list = document.getElementById(input.getAttribute('list'));
+    if (list) input.setAttribute('data-static-choice-values', Array.prototype.map.call(list.options, function(option) { return option.value; }).join('\u001f'));
+    input.setAttribute('data-static-choice', input.getAttribute('list') === 'registeredSwVersionList' ? 'sw' : 'robot');
+    input.removeAttribute('list');
+    renderStaticIsoChoicePanel(input);
+  }, true);
+
+  document.addEventListener('focusin', function(event) {
+    var input = event.target && event.target.matches ? (event.target.matches('[data-static-choice], [list="registeredRobotList"], [list="registeredSwVersionList"]') && event.target) : null;
+    if (input && !input.getAttribute('data-static-choice')) input.setAttribute('data-static-choice', input.getAttribute('list') === 'registeredSwVersionList' ? 'sw' : 'robot');
+    if (input) renderStaticIsoChoicePanel(input);
+  });
+  document.addEventListener('input', function(event) {
+    var input = event.target && event.target.matches && event.target.matches('[data-static-choice], [list="registeredRobotList"], [list="registeredSwVersionList"]') ? event.target : null;
+    if (input && !input.getAttribute('data-static-choice')) input.setAttribute('data-static-choice', input.getAttribute('list') === 'registeredSwVersionList' ? 'sw' : 'robot');
+    if (input) renderStaticIsoChoicePanel(input);
+  });
+  document.addEventListener('mousedown', function(event) {
+    var option = event.target.closest && event.target.closest('.static-iso-choice-option');
+    if (option && staticIsoChoiceTarget) { event.preventDefault(); staticIsoChoiceTarget.value = option.dataset.value; closeStaticIsoChoicePanel(); staticIsoChoiceTarget.focus(); return; }
+    if (staticIsoChoiceTarget && !event.target.closest('[data-static-choice]') && !event.target.closest('.static-iso-choice-panel')) closeStaticIsoChoicePanel();
+  });
+  document.addEventListener('keydown', function(event) {
+    if (!staticIsoChoiceTarget || event.target !== staticIsoChoiceTarget || !staticIsoChoicePopup || staticIsoChoicePopup.hidden) return;
+    var options = staticIsoChoicePopup.querySelectorAll('.static-iso-choice-option');
+    if (event.key === 'Escape') { closeStaticIsoChoicePanel(); return; }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); staticIsoChoiceIndex = (staticIsoChoiceIndex + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length; Array.prototype.forEach.call(options, function(option, i) { option.classList.toggle('active', i === staticIsoChoiceIndex); }); if (options[staticIsoChoiceIndex]) options[staticIsoChoiceIndex].scrollIntoView({block:'nearest'}); }
+    if (event.key === 'Enter' && options[staticIsoChoiceIndex]) { event.preventDefault(); staticIsoChoiceTarget.value = options[staticIsoChoiceIndex].dataset.value; closeStaticIsoChoicePanel(); }
+  });
+  window.addEventListener('resize', positionStaticIsoChoicePanel);
+  window.addEventListener('scroll', positionStaticIsoChoicePanel, true);
+
+  function convertStaticIsoNativeChoices(root) {
+    if (!root || !root.querySelectorAll) return;
+    var fields = root.matches && root.matches('[list="registeredRobotList"], [list="registeredSwVersionList"]') ? [root] : root.querySelectorAll('[list="registeredRobotList"], [list="registeredSwVersionList"]');
+    Array.prototype.forEach.call(fields, function(input) {
+      var list = document.getElementById(input.getAttribute('list'));
+      if (list) input.setAttribute('data-static-choice-values', Array.prototype.map.call(list.options, function(option) { return option.value; }).join('\u001f'));
+      input.setAttribute('data-static-choice', input.getAttribute('list') === 'registeredSwVersionList' ? 'sw' : 'robot');
+      input.removeAttribute('list');
+    });
+  }
+
+  if (document.body && window.MutationObserver) {
+    convertStaticIsoNativeChoices(document.body);
+    new MutationObserver(function(records) {
+      records.forEach(function(record) { Array.prototype.forEach.call(record.addedNodes, convertStaticIsoNativeChoices); });
+    }).observe(document.body, {childList:true, subtree:true});
+  }
+
   var I18N = {
     en: {
       app_title: "AC3110 DVT ISO",
